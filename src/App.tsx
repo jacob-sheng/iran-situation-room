@@ -12,6 +12,13 @@ import { Activity, Moon, Sun } from 'lucide-react';
 import { useI18n } from './i18n';
 
 type MapFocus = { coordinates: [number, number]; zoom?: number; key: string } | null;
+type ThemeSource = 'system' | 'user';
+
+const DEFAULT_LLM_SETTINGS: LLMSettings = {
+  endpoint: 'https://warapi1.zeabur.app/v1',
+  apiKey: 'sk-api123433',
+  model: 'gpt-5.2',
+};
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -79,13 +86,28 @@ function pickBestSignal(signals: IntelSignal[]) {
 
 export default function App() {
   const { locale, setLocale, t } = useI18n();
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const initialTheme = useMemo(() => {
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem('uiTheme');
+    } catch {
+      saved = null;
+    }
+
+    if (saved === 'dark' || saved === 'light') {
+      return { source: 'user' as const, isDark: saved === 'dark' };
+    }
+
+    const prefersDark = typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return { source: 'system' as const, isDark: prefersDark };
+  }, []);
+
+  const [themeSource, setThemeSource] = useState<ThemeSource>(initialTheme.source);
+  const [isDarkMode, setIsDarkMode] = useState(initialTheme.isDark);
   const [showSettings, setShowSettings] = useState(false);
-  const [llmSettings, setLlmSettings] = useState<LLMSettings>({
-    endpoint: '',
-    apiKey: '',
-    model: 'gpt-3.5-turbo'
-  });
+  const [llmSettings, setLlmSettings] = useState<LLMSettings>(DEFAULT_LLM_SETTINGS);
 
   const [filters, setFilters] = useState<MapFilters>({
     showUnits: true,
@@ -132,12 +154,46 @@ export default function App() {
     }
   }, [isDarkMode]);
 
+  // Follow system theme changes until the user explicitly overrides it.
+  useEffect(() => {
+    if (themeSource !== 'system') return;
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      const next = 'matches' in e ? e.matches : mql.matches;
+      setIsDarkMode(Boolean(next));
+    };
+    // Sync once in case it changed since initial render.
+    onChange(mql);
+
+    try {
+      // Modern browsers
+      (mql as any).addEventListener?.('change', onChange);
+      // Safari fallback
+      (mql as any).addListener?.(onChange);
+    } catch {
+      // Ignore.
+    }
+
+    return () => {
+      try {
+        (mql as any).removeEventListener?.('change', onChange);
+        (mql as any).removeListener?.(onChange);
+      } catch {
+        // Ignore.
+      }
+    };
+  }, [themeSource]);
+
   // Load settings from local storage
   useEffect(() => {
     const saved = localStorage.getItem('llmSettings');
     if (saved) {
       try {
-        setLlmSettings(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          setLlmSettings({ ...DEFAULT_LLM_SETTINGS, ...(parsed as any) });
+        }
       } catch (e) {
         console.error('Failed to parse settings');
       }
@@ -733,7 +789,16 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => setIsDarkMode(!isDarkMode)}
+            onClick={() => {
+              const next = !isDarkMode;
+              setIsDarkMode(next);
+              setThemeSource('user');
+              try {
+                localStorage.setItem('uiTheme', next ? 'dark' : 'light');
+              } catch {
+                // Ignore.
+              }
+            }}
             className="p-2.5 bg-white/90 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-full shadow-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
             title={t('app.toggleTheme')}
           >

@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Iran Situation Room</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('uiTheme');
+          var isDark = saved === 'dark' || (saved !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', !!isDark);
+        } catch (e) {
+          // Ignore.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
