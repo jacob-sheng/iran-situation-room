@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { LLMSettings } from '../types';
-import { X, Settings, Save, RefreshCw } from 'lucide-react';
+import { Check, ChevronDown, RefreshCw, Save, Settings, X } from 'lucide-react';
+import clsx from 'clsx';
 
 interface SettingsModalProps {
   settings: LLMSettings;
@@ -13,12 +14,44 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelError, setModelError] = useState('');
+  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const modelPickerRef = useRef<HTMLDivElement | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSave(localSettings);
     onClose();
   };
+
+  const filteredModels = useMemo(() => {
+    const q = (localSettings.model || '').trim().toLowerCase();
+    const list = Array.isArray(models) ? [...models] : [];
+    list.sort((a, b) => a.localeCompare(b));
+    if (!q) return list;
+    return list.filter(m => m.toLowerCase().includes(q));
+  }, [models, localSettings.model]);
+
+  useEffect(() => {
+    if (!isModelPickerOpen) return;
+
+    const onMouseDown = (e: MouseEvent) => {
+      const root = modelPickerRef.current;
+      if (!root) return;
+      if (root.contains(e.target as Node)) return;
+      setIsModelPickerOpen(false);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsModelPickerOpen(false);
+    };
+
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isModelPickerOpen]);
 
   const fetchModels = async () => {
     if (!localSettings.endpoint || !localSettings.apiKey) {
@@ -28,16 +61,55 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
     setLoadingModels(true);
     setModelError('');
     try {
-      const res = await fetch(`${localSettings.endpoint.replace(/\/$/, '')}/models`, {
-        headers: { 'Authorization': `Bearer ${localSettings.apiKey}` }
-      });
-      if (!res.ok) throw new Error('Failed to fetch models');
-      const data = await res.json();
-      if (data.data && Array.isArray(data.data)) {
-        setModels(data.data.map((m: any) => m.id));
-      } else {
-        throw new Error('Invalid response format');
+      const base = localSettings.endpoint.replace(/\/$/, '');
+      const candidates = base.endsWith('/v1') ? [`${base}/models`] : [`${base}/models`, `${base}/v1/models`];
+
+      let lastErr: unknown = null;
+      for (let i = 0; i < candidates.length; i++) {
+        const url = candidates[i];
+        try {
+          const res = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${localSettings.apiKey}` }
+          });
+
+          if (!res.ok) {
+            // If the user provided a base URL without /v1, some providers only support /v1/models.
+            if (res.status === 404 && i < candidates.length - 1) continue;
+            let detail = '';
+            try {
+              detail = (await res.text()).trim();
+            } catch {
+              // Ignore body parse failures.
+            }
+            const suffix = detail ? ` - ${detail.slice(0, 240)}` : '';
+            throw new Error(`Failed to fetch models: ${res.status} ${res.statusText}${suffix}`);
+          }
+
+          const data = await res.json();
+          const list = Array.isArray(data?.data)
+            ? data.data
+            : (Array.isArray(data?.models) ? data.models : null);
+          if (!Array.isArray(list)) {
+            throw new Error('Invalid response format (expected { data: [...] }).');
+          }
+
+          const ids = list
+            .map((m: any) => (typeof m === 'string' ? m : m?.id))
+            .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
+            .map((id: string) => id.trim());
+
+          if (ids.length === 0) throw new Error('No models returned.');
+
+          setModels(ids);
+          setIsModelPickerOpen(true);
+          lastErr = null;
+          break;
+        } catch (e: any) {
+          lastErr = e;
+        }
       }
+
+      if (lastErr) throw lastErr;
     } catch (e: any) {
       setModelError(e.message || 'Error fetching models');
     } finally {
@@ -102,18 +174,74 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
                 Fetch Models
               </button>
             </div>
-            <input
-              type="text"
-              required
-              list="models-list"
-              value={localSettings.model}
-              onChange={(e) => setLocalSettings(s => ({ ...s, model: e.target.value }))}
-              placeholder="gpt-3.5-turbo"
-              className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-            />
-            <datalist id="models-list">
-              {models.map(m => <option key={m} value={m} />)}
-            </datalist>
+            <div ref={modelPickerRef} className="relative">
+              <input
+                type="text"
+                required
+                value={localSettings.model}
+                onChange={(e) => {
+                  setLocalSettings(s => ({ ...s, model: e.target.value }));
+                  if (models.length > 0) setIsModelPickerOpen(true);
+                }}
+                onFocus={() => {
+                  if (models.length > 0) setIsModelPickerOpen(true);
+                }}
+                placeholder="gpt-3.5-turbo"
+                className="w-full pl-3 pr-10 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              />
+              <button
+                type="button"
+                title={models.length > 0 ? 'Show Models' : 'Fetch models first'}
+                onClick={() => {
+                  if (models.length === 0) return;
+                  setIsModelPickerOpen(v => !v);
+                }}
+                disabled={models.length === 0}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 disabled:opacity-40 disabled:hover:text-slate-400"
+              >
+                <ChevronDown size={16} className={clsx(isModelPickerOpen ? 'rotate-180 transition-transform' : 'transition-transform')} />
+              </button>
+
+              {isModelPickerOpen && (
+                <div className="absolute z-20 mt-1 w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-md shadow-2xl overflow-hidden">
+                  <div className="max-h-64 overflow-auto">
+                    {filteredModels.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">
+                        {models.length === 0 ? 'No models loaded.' : 'No matching models.'}
+                      </div>
+                    ) : (
+                      filteredModels.map((m) => {
+                        const isSelected = m === localSettings.model;
+                        return (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => {
+                              setLocalSettings(s => ({ ...s, model: m }));
+                              setIsModelPickerOpen(false);
+                            }}
+                            className={clsx(
+                              "w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors",
+                              isSelected ? "bg-cyan-50 dark:bg-cyan-500/10 text-cyan-700 dark:text-cyan-200" : "text-slate-800 dark:text-slate-200"
+                            )}
+                          >
+                            <span className="font-mono text-xs">{m}</span>
+                            {isSelected && <Check size={14} className="shrink-0" />}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {models.length > 0 && (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Loaded {models.length} model{models.length === 1 ? '' : 's'}.
+              </p>
+            )}
+
             {modelError && <p className="text-xs text-rose-500 mt-1">{modelError}</p>}
           </div>
 
