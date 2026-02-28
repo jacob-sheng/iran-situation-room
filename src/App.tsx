@@ -8,6 +8,7 @@ import { Arrow, BattleResult, Event, Infrastructure, IntelNewsItem, IntelSignal,
 import { IRAN_COORDINATES, MOCK_ARROWS, MOCK_BATTLE_RESULTS, MOCK_EVENTS, MOCK_INFRASTRUCTURE, MOCK_UNITS } from './constants';
 import { fetchIntelNews } from './services/llmService';
 import { verifyIntelLocation } from './services/geocodeService';
+import { translateBatchToZh } from './services/translateService';
 import { Moon, RefreshCw, Sun, X } from 'lucide-react';
 import { useI18n } from './i18n';
 
@@ -19,6 +20,7 @@ const DEFAULT_LLM_SETTINGS: LLMSettings = {
   endpoint: 'https://warapi1.zeabur.app/v1',
   apiKey: 'sk-api123433',
   model: 'gpt-5.2',
+  translationModel: 'gpt-5.1-codex-mini',
 };
 
 function sleep(ms: number) {
@@ -109,6 +111,98 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(initialTheme.isDark);
   const [showSettings, setShowSettings] = useState(false);
   const [llmSettings, setLlmSettings] = useState<LLMSettings>(DEFAULT_LLM_SETTINGS);
+  const llmSettingsRef = useRef<LLMSettings>(llmSettings);
+  useEffect(() => {
+    llmSettingsRef.current = llmSettings;
+  }, [llmSettings]);
+
+  const localeRef = useRef(locale);
+  useEffect(() => {
+    localeRef.current = locale;
+  }, [locale]);
+
+  const dynZhCacheRef = useRef<Map<string, string>>(new Map());
+  const dynZhPendingRef = useRef<Set<string>>(new Set());
+  const dynZhQueueRef = useRef<string[]>([]);
+  const dynZhTranslatingRef = useRef(false);
+  const [, bumpDynZhVersion] = useState(0);
+
+  const translateText = (text: string) => {
+    if (locale !== 'zh') return text;
+    const key = String(text || '').trim();
+    if (!key) return text;
+    return dynZhCacheRef.current.get(key) || text;
+  };
+
+  function enqueueTranslateTexts(texts: string[]) {
+    if (localeRef.current !== 'zh') return;
+    if (!Array.isArray(texts) || texts.length === 0) return;
+
+    const cache = dynZhCacheRef.current;
+    const pending = dynZhPendingRef.current;
+    const queue = dynZhQueueRef.current;
+
+    const seen = new Set<string>();
+    const next: string[] = [];
+    for (const t of texts) {
+      const key = String(t || '').trim();
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (cache.has(key)) continue;
+      if (pending.has(key)) continue;
+      pending.add(key);
+      next.push(key);
+    }
+
+    if (next.length === 0) return;
+    queue.push(...next);
+    void drainTranslateQueue();
+  }
+
+  async function drainTranslateQueue() {
+    if (dynZhTranslatingRef.current) return;
+    if (localeRef.current !== 'zh') return;
+    dynZhTranslatingRef.current = true;
+    try {
+      while (dynZhQueueRef.current.length > 0) {
+        if (localeRef.current !== 'zh') break;
+        const chunk = dynZhQueueRef.current.splice(0, 40);
+        if (chunk.length === 0) break;
+
+        const base = Date.now().toString(36);
+        const idToText = new Map<string, string>();
+        const items = chunk.map((text, idx) => {
+          const id = `t:${base}:${idx}`;
+          idToText.set(id, text);
+          return { id, text };
+        });
+
+        let results: Array<{ id: string; text: string }> = [];
+        try {
+          results = await translateBatchToZh(llmSettingsRef.current, items);
+        } catch {
+          results = [];
+        }
+
+        if (results.length > 0) {
+          const cache = dynZhCacheRef.current;
+          for (const row of results) {
+            const orig = idToText.get(row.id);
+            const translated = String(row.text || '').trim();
+            if (!orig || !translated) continue;
+            cache.set(orig, translated);
+          }
+          bumpDynZhVersion(v => v + 1);
+        }
+
+        // Always release pending slots for this chunk (success or failure).
+        for (const text of chunk) dynZhPendingRef.current.delete(text);
+      }
+    } finally {
+      dynZhTranslatingRef.current = false;
+    }
+  }
 
   const [filters, setFilters] = useState<MapFilters>({
     showUnits: true,
@@ -216,6 +310,26 @@ export default function App() {
     autoRefreshDone.current = true;
     void refreshIntel();
   }, [llmSettings.endpoint, llmSettings.apiKey, llmSettings.model]);
+
+  useEffect(() => {
+    if (locale !== 'zh') return;
+    const top = intelNewsRef.current.slice(0, 20);
+    const texts: string[] = [];
+    for (const item of top) {
+      texts.push(item.title, item.summary);
+    }
+    enqueueTranslateTexts(texts);
+  }, [locale]);
+
+  useEffect(() => {
+    if (locale !== 'zh') return;
+    if (!selectedItem) return;
+    const texts: string[] = [];
+    if ('name' in selectedItem) texts.push(selectedItem.name);
+    if ('title' in selectedItem) texts.push((selectedItem as any).title);
+    if ('description' in selectedItem && selectedItem.description) texts.push(selectedItem.description);
+    enqueueTranslateTexts(texts);
+  }, [locale, selectedItem]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
@@ -606,6 +720,17 @@ export default function App() {
         return true;
       });
 
+      if (locale === 'zh') {
+        const texts: string[] = [];
+        for (const item of freshCanonical) {
+          texts.push(item.title, item.summary);
+          for (const sig of item.signals || []) {
+            texts.push(sig.title, sig.description);
+          }
+        }
+        enqueueTranslateTexts(texts);
+      }
+
       // Preserve history by batches: new items always prepend, old items are never overwritten.
       const batchId = `b:${Date.now()}`;
       const fresh = freshCanonical.map((item, idx) => ({
@@ -890,7 +1015,7 @@ export default function App() {
         {!isMobile && <ControlPanel filters={filters} setFilters={setFilters} />}
 
         {!isMobile && selectedItem && (
-          <DetailsPanel selectedItem={selectedItem} onClose={() => setSelectedItem(null)} />
+          <DetailsPanel selectedItem={selectedItem} onClose={() => setSelectedItem(null)} translate={translateText} />
         )}
       </div>
 
@@ -907,6 +1032,7 @@ export default function App() {
           onRefresh={refreshIntel}
           onSelectNews={handleSelectNews}
           className="w-full h-full border-l border-slate-200 dark:border-slate-800"
+          translate={translateText}
         />
       </div>
       )}
@@ -987,6 +1113,7 @@ export default function App() {
                       onRefresh={refreshIntel}
                       onSelectNews={handleSelectNews}
                       className="w-full h-full rounded-xl border border-slate-200 dark:border-slate-800"
+                      translate={translateText}
                     />
                   )}
 
@@ -999,6 +1126,7 @@ export default function App() {
                       selectedItem={selectedItem}
                       onClose={() => setMobileSheet('none')}
                       embedded
+                      translate={translateText}
                     />
                   )}
                 </div>

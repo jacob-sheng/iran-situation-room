@@ -16,6 +16,7 @@ interface NewsPanelProps {
   onRefresh: () => void;
   onSelectNews: (id: string) => void;
   className?: string;
+  translate?: (text: string) => string;
 }
 
 export default function NewsPanel({
@@ -29,6 +30,7 @@ export default function NewsPanel({
   onRefresh,
   onSelectNews,
   className,
+  translate,
 }: NewsPanelProps) {
   const { t } = useI18n();
   return (
@@ -114,7 +116,7 @@ export default function NewsPanel({
                 >
                   <div className="flex justify-between items-start gap-2">
                     <h3 className="text-sm font-medium text-slate-800 dark:text-slate-200 leading-tight">
-                      {item.title}
+                      {translate ? translate(item.title) : item.title}
                     </h3>
                     <div className="flex items-center gap-1">
                       <div className="flex items-center gap-1 text-[10px] font-mono text-slate-500">
@@ -133,7 +135,7 @@ export default function NewsPanel({
                     </div>
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                    {item.summary}
+                    {translate ? translate(item.summary) : item.summary}
                   </p>
                   <div className="flex justify-between items-center mt-1">
                     <span className="text-[10px] font-mono text-cyan-600 dark:text-cyan-500/70 uppercase tracking-wider">

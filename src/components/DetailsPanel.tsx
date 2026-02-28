@@ -9,9 +9,10 @@ interface DetailsPanelProps {
   selectedItem: Unit | Event | Infrastructure | BattleResult | null;
   onClose: () => void;
   embedded?: boolean;
+  translate?: (text: string) => string;
 }
 
-export default function DetailsPanel({ selectedItem, onClose, embedded = false }: DetailsPanelProps) {
+export default function DetailsPanel({ selectedItem, onClose, embedded = false, translate }: DetailsPanelProps) {
   if (!selectedItem) return null;
   const { t } = useI18n();
 
@@ -47,8 +48,8 @@ export default function DetailsPanel({ selectedItem, onClose, embedded = false }
   };
 
   const getTitle = () => {
-    if ('name' in selectedItem) return selectedItem.name;
-    if ('title' in selectedItem) return selectedItem.title;
+    if ('name' in selectedItem) return translate ? translate(selectedItem.name) : selectedItem.name;
+    if ('title' in selectedItem) return translate ? translate(selectedItem.title) : selectedItem.title;
     return t('details.unknown');
   };
 
@@ -102,13 +103,15 @@ export default function DetailsPanel({ selectedItem, onClose, embedded = false }
           </button>
         </div>
 
-        <div className="space-y-3">
-          <div className="flex items-start gap-3 text-sm text-slate-600 dark:text-slate-300">
-            <Info size={16} className="text-slate-400 dark:text-slate-500 mt-0.5 shrink-0" />
-            <p className="leading-relaxed">
-              {('description' in selectedItem && selectedItem.description) ? selectedItem.description : t('details.noDescription')}
-            </p>
-          </div>
+          <div className="space-y-3">
+            <div className="flex items-start gap-3 text-sm text-slate-600 dark:text-slate-300">
+              <Info size={16} className="text-slate-400 dark:text-slate-500 mt-0.5 shrink-0" />
+              <p className="leading-relaxed">
+              {('description' in selectedItem && selectedItem.description)
+                ? (translate ? translate(selectedItem.description) : selectedItem.description)
+                : t('details.noDescription')}
+              </p>
+            </div>
 
           {('date' in selectedItem) && (
             <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">

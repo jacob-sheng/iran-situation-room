@@ -24,6 +24,7 @@ export const MESSAGES = {
     'settings.apiKeyLabel': 'API Key',
     'settings.apiKeyPlaceholder': 'sk-...',
     'settings.modelLabel': 'Model',
+    'settings.translationModelLabel': 'Translation Model',
     'settings.fetchModels': 'Fetch models',
     'settings.loadedModels': 'Loaded {count} model{plural}.',
     'settings.showModels': 'Show models',
@@ -31,6 +32,7 @@ export const MESSAGES = {
     'settings.noModelsLoaded': 'No models loaded.',
     'settings.noMatchingModels': 'No matching models.',
     'settings.enterEndpointAndKeyFirst': 'Please enter endpoint and API key first.',
+    'settings.translationModelPlaceholder': 'gpt-5.1-codex-mini',
     'settings.cancel': 'Cancel',
     'settings.save': 'Save',
 
@@ -100,6 +102,7 @@ export const MESSAGES = {
     'settings.apiKeyLabel': 'API Key',
     'settings.apiKeyPlaceholder': 'sk-...',
     'settings.modelLabel': '模型',
+    'settings.translationModelLabel': '翻译模型',
     'settings.fetchModels': '获取模型列表',
     'settings.loadedModels': '已加载 {count} 个模型。',
     'settings.showModels': '展开模型列表',
@@ -107,6 +110,7 @@ export const MESSAGES = {
     'settings.noModelsLoaded': '尚未加载模型。',
     'settings.noMatchingModels': '没有匹配的模型。',
     'settings.enterEndpointAndKeyFirst': '请先填写 endpoint 和 API key。',
+    'settings.translationModelPlaceholder': 'gpt-5.1-codex-mini',
     'settings.cancel': '取消',
     'settings.save': '保存',
 

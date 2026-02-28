@@ -136,4 +136,5 @@ export interface LLMSettings {
   endpoint: string;
   apiKey: string;
   model: string;
+  translationModel?: string;
 }
