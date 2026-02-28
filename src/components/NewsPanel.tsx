@@ -2,6 +2,7 @@ import React from 'react';
 import { IntelNewsItem, LLMSettings } from '../types';
 import { Activity, ExternalLink, MapPin, RefreshCw, Settings } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useI18n } from '../i18n';
 
 interface NewsPanelProps {
   settings: LLMSettings;
@@ -26,18 +27,19 @@ export default function NewsPanel({
   onRefresh,
   onSelectNews,
 }: NewsPanelProps) {
+  const { t } = useI18n();
   return (
     <div className="w-80 h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-l border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-colors duration-300">
       <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2">
           <Activity size={18} className="text-cyan-600 dark:text-cyan-400" />
-          Live Intel
+          {t('news.title')}
         </h2>
         <div className="flex items-center gap-1">
           <button
             onClick={onOpenSettings}
             className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
-            title="API Settings"
+            title={t('news.apiSettings')}
           >
             <Settings size={16} />
           </button>
@@ -45,7 +47,7 @@ export default function NewsPanel({
             onClick={onRefresh}
             disabled={loading || !settings.endpoint || !settings.apiKey}
             className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors disabled:opacity-50"
-            title="Refresh News"
+            title={t('news.refreshNews')}
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </button>
@@ -55,9 +57,9 @@ export default function NewsPanel({
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
         {!settings.endpoint || !settings.apiKey ? (
           <div className="text-slate-500 text-sm p-4 bg-slate-50 dark:bg-slate-800/30 rounded-lg border border-slate-200 dark:border-slate-700/50 flex flex-col gap-2">
-            <p>Please configure API settings first.</p>
+            <p>{t('news.configureFirst')}</p>
             <button onClick={onOpenSettings} className="text-cyan-700 dark:text-cyan-300 underline text-left font-medium">
-              Open Settings
+              {t('news.openSettings')}
             </button>
           </div>
         ) : loading ? (
@@ -75,13 +77,13 @@ export default function NewsPanel({
             <p>{error}</p>
             {error.includes('configure') && (
               <button onClick={onOpenSettings} className="text-rose-700 dark:text-rose-300 underline text-left font-medium">
-                Open Settings
+                {t('news.openSettings')}
               </button>
             )}
           </div>
         ) : news.length === 0 ? (
           <div className="text-slate-500 text-sm text-center py-8">
-            No recent intel found.
+            {t('news.noRecentIntel')}
           </div>
         ) : (
           news.map((item, index) => {
@@ -139,7 +141,7 @@ export default function NewsPanel({
                   <div className="flex items-center gap-3 py-1">
                     <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
                     <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                      以上为本次刷新
+                      {t('news.dividerThisRefresh')}
                     </div>
                     <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
                   </div>

@@ -9,6 +9,7 @@ import { IRAN_COORDINATES, MOCK_ARROWS, MOCK_BATTLE_RESULTS, MOCK_EVENTS, MOCK_I
 import { fetchIntelNews } from './services/llmService';
 import { verifyIntelLocation } from './services/geocodeService';
 import { Activity, Moon, Sun } from 'lucide-react';
+import { useI18n } from './i18n';
 
 type MapFocus = { coordinates: [number, number]; zoom?: number; key: string } | null;
 
@@ -77,6 +78,7 @@ function pickBestSignal(signals: IntelSignal[]) {
 }
 
 export default function App() {
+  const { locale, setLocale, t } = useI18n();
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [llmSettings, setLlmSettings] = useState<LLMSettings>({
@@ -101,6 +103,10 @@ export default function App() {
   }, [units]);
 
   const [intelNews, setIntelNews] = useState<IntelNewsItem[]>([]);
+  const intelNewsRef = useRef<IntelNewsItem[]>(intelNews);
+  useEffect(() => {
+    intelNewsRef.current = intelNews;
+  }, [intelNews]);
   const [loadingNews, setLoadingNews] = useState(false);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [selectedNewsId, setSelectedNewsId] = useState<string | null>(null);
@@ -150,7 +156,7 @@ export default function App() {
 
   function buildSourceRef(item: IntelNewsItem): SourceRef {
     return {
-      name: item.source || 'Source',
+      name: item.source || t('details.sourceFallback'),
       url: item.url,
       timestamp: item.timestamp || new Date().toISOString(),
     };
@@ -212,23 +218,34 @@ export default function App() {
             verified: signal.verified,
           });
         } else if (signal.kind === 'movement') {
-          // If the movement isn't tied to a unit, drop an event marker so the news always maps to a clickable icon.
-          if (!signal.unit?.id && !signal.unit?.name) {
-            events.push({
-              id: `intel-event:${item.id}:${signal.id}`,
-              title: signal.title,
-              date: item.timestamp || new Date().toISOString(),
-              description: signal.description,
-              severity: signal.severity,
-              coordinates: coords,
-              sources: [src],
-              newsId: item.id,
-              confidence: clamp01(signal.confidence),
-              verified: signal.verified,
-            });
-          }
+          // Always materialize a marker for movement signals so historic news items keep a clickable icon,
+          // even if unit markers later move and no longer reference the old newsId.
+          events.push({
+            id: `intel-event:${item.id}:${signal.id}`,
+            title: signal.title,
+            date: item.timestamp || new Date().toISOString(),
+            description: signal.description,
+            severity: signal.severity,
+            coordinates: coords,
+            sources: [src],
+            newsId: item.id,
+            confidence: clamp01(signal.confidence),
+            verified: signal.verified,
+          });
         } else if (signal.kind === 'unit') {
-          // Unit signals will be represented as actual units in applyIntelSignalsToUnits().
+          // Unit markers can only represent the latest state; add a per-news marker so each item remains clickable.
+          events.push({
+            id: `intel-event:${item.id}:${signal.id}`,
+            title: signal.title,
+            date: item.timestamp || new Date().toISOString(),
+            description: signal.description,
+            severity: signal.severity,
+            coordinates: coords,
+            sources: [src],
+            newsId: item.id,
+            confidence: clamp01(signal.confidence),
+            verified: signal.verified,
+          });
         }
       }
     }
@@ -470,13 +487,13 @@ export default function App() {
     setLoadingNews(true);
     setNewsError(null);
     try {
-      const MAX_NEWS_ITEMS = 0; // 0 means unlimited retention.
+      const MAX_NEWS_ITEMS = 100;
       const freshAll = await fetchIntelNews(llmSettings);
       if (refreshSeq.current !== token) return;
 
       // Dedupe within the freshly fetched batch by URL (keep first occurrence).
       const seenUrls = new Set<string>();
-      const fresh = freshAll.filter(item => {
+      const freshCanonical = freshAll.filter(item => {
         const url = String(item?.url || '').trim();
         if (!url) return false;
         if (seenUrls.has(url)) return false;
@@ -484,13 +501,19 @@ export default function App() {
         return true;
       });
 
-      // Merge by URL (refresh overwrites existing). New items appear at the top.
-      const freshUrls = new Set(fresh.map(n => n.url));
-      const older = intelNews.filter(n => !freshUrls.has(n.url));
-      let merged = [...fresh, ...older];
-      if (MAX_NEWS_ITEMS > 0 && merged.length > MAX_NEWS_ITEMS) merged = merged.slice(0, MAX_NEWS_ITEMS);
+      // Preserve history by batches: new items always prepend, old items are never overwritten.
+      const batchId = `b:${Date.now()}`;
+      const fresh = freshCanonical.map((item, idx) => ({
+        ...item,
+        id: `${item.id}:${batchId}:${idx}`,
+      }));
+
+      const prev = intelNewsRef.current;
+      let merged = [...fresh, ...prev];
+      if (merged.length > MAX_NEWS_ITEMS) merged = merged.slice(0, MAX_NEWS_ITEMS);
 
       setIntelNews(merged);
+      intelNewsRef.current = merged;
       setLatestBatchSize(fresh.length);
 
       // Derive clickable layers from signals and kick off sourced unit movement.
@@ -501,8 +524,8 @@ export default function App() {
 
       // Only animate unit movement based on the current refresh batch (avoid replaying old moves).
       const { arrows: batchArrows } = applyIntelSignalsToUnitsAndArrows(fresh, { animate: true });
-      const refreshedNewsIds = new Set(fresh.map(n => n.id));
-      setIntelArrows(prev => [...batchArrows, ...prev.filter(a => !refreshedNewsIds.has(a.newsId || ''))]);
+      const keptNewsIds = new Set(merged.map(n => n.id));
+      setIntelArrows(prev => [...batchArrows, ...prev.filter(a => keptNewsIds.has(a.newsId || ''))]);
 
       // Verify a limited number of locations in the background and update markers accordingly.
       void (async () => {
@@ -613,14 +636,15 @@ export default function App() {
           }),
         }));
 
-        let nextMerged = [...freshVerified, ...older];
-        if (MAX_NEWS_ITEMS > 0 && nextMerged.length > MAX_NEWS_ITEMS) nextMerged = nextMerged.slice(0, MAX_NEWS_ITEMS);
-
-        setIntelNews(nextMerged);
-        const nextDerived = deriveIntelLayersFromNews(nextMerged);
-        setIntelEvents(nextDerived.events);
-        setIntelInfrastructure(nextDerived.infrastructure);
-        setIntelBattleResults(nextDerived.battleResults);
+        const byId = new Map(freshVerified.map(n => [n.id, n] as const));
+        setIntelNews(prev => {
+          const next = prev.map(n => (byId.has(n.id) ? byId.get(n.id)! : n));
+          const nextDerived = deriveIntelLayersFromNews(next);
+          setIntelEvents(nextDerived.events);
+          setIntelInfrastructure(nextDerived.infrastructure);
+          setIntelBattleResults(nextDerived.battleResults);
+          return next;
+        });
 
         // Patch arrow endpoints (keep original starts so the direction stays meaningful).
         const nextEnds = new Map<string, [number, number]>();
@@ -638,8 +662,10 @@ export default function App() {
       })();
     } catch (e: any) {
       if (refreshSeq.current !== token) return;
-      const msg = typeof e?.message === 'string' ? e.message : String(e);
-      setNewsError(msg || 'Failed to refresh intel.');
+      let msg = typeof e?.message === 'string' ? e.message : String(e);
+      if (msg.includes('API Endpoint and Key are required')) msg = t('errors.missingSettings');
+      if (!msg) msg = t('errors.refreshFailed');
+      setNewsError(msg);
     } finally {
       if (refreshSeq.current === token) setLoadingNews(false);
     }
@@ -672,18 +698,48 @@ export default function App() {
         <div className="absolute top-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 bg-white/90 dark:bg-slate-900/80 backdrop-blur-md px-6 py-3 rounded-full border border-slate-200 dark:border-slate-700 shadow-2xl transition-colors duration-300">
           <Activity className="text-rose-500 animate-pulse" size={20} />
           <h1 className="text-lg font-bold tracking-widest uppercase text-slate-800 dark:text-slate-100">
-            Iran Situation Room
+            {t('app.title')}
           </h1>
           <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping ml-2" />
         </div>
 
-        <button
-          onClick={() => setIsDarkMode(!isDarkMode)}
-          className="absolute top-6 right-6 z-10 p-2.5 bg-white/90 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-full shadow-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-          title="Toggle Theme"
-        >
-          {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
-        </button>
+        <div className="absolute top-6 right-6 z-10 flex items-center gap-2">
+          <div
+            className="flex items-center bg-white/90 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-full shadow-lg overflow-hidden"
+            title={t('app.toggleLanguage')}
+          >
+            <button
+              onClick={() => setLocale('zh')}
+              className={[
+                "px-3 py-2 text-xs font-mono transition-colors",
+                locale === 'zh'
+                  ? "bg-cyan-600 text-white"
+                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60",
+              ].join(' ')}
+            >
+              {t('app.lang.zh')}
+            </button>
+            <button
+              onClick={() => setLocale('en')}
+              className={[
+                "px-3 py-2 text-xs font-mono transition-colors",
+                locale === 'en'
+                  ? "bg-cyan-600 text-white"
+                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60",
+              ].join(' ')}
+            >
+              {t('app.lang.en')}
+            </button>
+          </div>
+
+          <button
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            className="p-2.5 bg-white/90 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-full shadow-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
+            title={t('app.toggleTheme')}
+          >
+            {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+        </div>
 
         <MapDashboard
           filters={filters}

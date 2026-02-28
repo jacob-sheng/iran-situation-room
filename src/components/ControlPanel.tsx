@@ -2,6 +2,7 @@ import React from 'react';
 import { MapFilters } from '../types';
 import { Layers, Shield, AlertTriangle, Navigation, MessageSquare, Factory, Crosshair } from 'lucide-react';
 import clsx from 'clsx';
+import { useI18n } from '../i18n';
 
 interface ControlPanelProps {
   filters: MapFilters;
@@ -9,24 +10,25 @@ interface ControlPanelProps {
 }
 
 export default function ControlPanel({ filters, setFilters }: ControlPanelProps) {
+  const { t } = useI18n();
   const toggleFilter = (key: keyof MapFilters) => {
     setFilters((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const controls = [
-    { id: 'showUnits', label: 'Units', icon: Shield, color: 'text-emerald-500 dark:text-emerald-400' },
-    { id: 'showEvents', label: 'Events', icon: AlertTriangle, color: 'text-amber-500 dark:text-amber-400' },
-    { id: 'showArrows', label: 'Movements', icon: Navigation, color: 'text-cyan-500 dark:text-cyan-400' },
-    { id: 'showAnnotations', label: 'Labels', icon: MessageSquare, color: 'text-slate-500 dark:text-slate-400' },
-    { id: 'showInfrastructure', label: 'Infrastructure', icon: Factory, color: 'text-indigo-500 dark:text-indigo-400' },
-    { id: 'showBattleResults', label: 'Battle Results', icon: Crosshair, color: 'text-rose-500 dark:text-rose-400' },
+    { id: 'showUnits', label: t('layers.units'), icon: Shield, color: 'text-emerald-500 dark:text-emerald-400' },
+    { id: 'showEvents', label: t('layers.events'), icon: AlertTriangle, color: 'text-amber-500 dark:text-amber-400' },
+    { id: 'showArrows', label: t('layers.movements'), icon: Navigation, color: 'text-cyan-500 dark:text-cyan-400' },
+    { id: 'showAnnotations', label: t('layers.labels'), icon: MessageSquare, color: 'text-slate-500 dark:text-slate-400' },
+    { id: 'showInfrastructure', label: t('layers.infrastructure'), icon: Factory, color: 'text-indigo-500 dark:text-indigo-400' },
+    { id: 'showBattleResults', label: t('layers.battleResults'), icon: Crosshair, color: 'text-rose-500 dark:text-rose-400' },
   ];
 
   return (
     <div className="absolute top-4 left-4 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl p-4 w-64 transition-colors duration-300">
       <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-200 dark:border-slate-800">
         <Layers size={18} className="text-cyan-600 dark:text-cyan-400" />
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">Map Layers</h2>
+        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">{t('layers.title')}</h2>
       </div>
       
       <div className="flex flex-col gap-3">

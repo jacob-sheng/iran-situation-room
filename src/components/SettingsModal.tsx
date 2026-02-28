@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { LLMSettings } from '../types';
 import { Check, ChevronDown, RefreshCw, Save, Settings, X } from 'lucide-react';
 import clsx from 'clsx';
+import { useI18n } from '../i18n';
 
 interface SettingsModalProps {
   settings: LLMSettings;
@@ -10,6 +11,7 @@ interface SettingsModalProps {
 }
 
 export default function SettingsModal({ settings, onSave, onClose }: SettingsModalProps) {
+  const { t } = useI18n();
   const [localSettings, setLocalSettings] = useState<LLMSettings>(settings);
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -55,7 +57,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
 
   const fetchModels = async () => {
     if (!localSettings.endpoint || !localSettings.apiKey) {
-      setModelError('Please enter endpoint and API key first.');
+      setModelError(t('settings.enterEndpointAndKeyFirst'));
       return;
     }
     setLoadingModels(true);
@@ -123,7 +125,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
         <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
           <div className="flex items-center gap-2 text-slate-800 dark:text-slate-200">
             <Settings size={18} />
-            <h2 className="font-semibold">OpenAPI Settings</h2>
+            <h2 className="font-semibold">{t('settings.title')}</h2>
           </div>
           <button onClick={onClose} className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
             <X size={18} />
@@ -133,28 +135,28 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-              API Endpoint (Base URL)
+              {t('settings.endpointLabel')}
             </label>
             <input
               type="url"
               required
               value={localSettings.endpoint}
               onChange={(e) => setLocalSettings(s => ({ ...s, endpoint: e.target.value }))}
-              placeholder="https://api.openai.com/v1"
+              placeholder={t('settings.endpointPlaceholder')}
               className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
           </div>
           
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-              API Key
+              {t('settings.apiKeyLabel')}
             </label>
             <input
               type="password"
               required
               value={localSettings.apiKey}
               onChange={(e) => setLocalSettings(s => ({ ...s, apiKey: e.target.value }))}
-              placeholder="sk-..."
+              placeholder={t('settings.apiKeyPlaceholder')}
               className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
           </div>
@@ -162,7 +164,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
-                Model
+                {t('settings.modelLabel')}
               </label>
               <button 
                 type="button" 
@@ -171,7 +173,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
                 className="text-xs text-cyan-600 dark:text-cyan-400 hover:underline flex items-center gap-1"
               >
                 <RefreshCw size={12} className={loadingModels ? 'animate-spin' : ''} />
-                Fetch Models
+                {t('settings.fetchModels')}
               </button>
             </div>
             <div ref={modelPickerRef} className="relative">
@@ -191,7 +193,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
               />
               <button
                 type="button"
-                title={models.length > 0 ? 'Show Models' : 'Fetch models first'}
+                title={models.length > 0 ? t('settings.showModels') : t('settings.fetchModelsFirst')}
                 onClick={() => {
                   if (models.length === 0) return;
                   setIsModelPickerOpen(v => !v);
@@ -207,7 +209,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
                   <div className="max-h-64 overflow-auto">
                     {filteredModels.length === 0 ? (
                       <div className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">
-                        {models.length === 0 ? 'No models loaded.' : 'No matching models.'}
+                        {models.length === 0 ? t('settings.noModelsLoaded') : t('settings.noMatchingModels')}
                       </div>
                     ) : (
                       filteredModels.map((m) => {
@@ -238,7 +240,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
 
             {models.length > 0 && (
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                Loaded {models.length} model{models.length === 1 ? '' : 's'}.
+                {t('settings.loadedModels', { count: models.length, plural: models.length === 1 ? '' : 's' })}
               </p>
             )}
 
@@ -251,14 +253,14 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
               onClick={onClose}
               className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
             >
-              Cancel
+              {t('settings.cancel')}
             </button>
             <button
               type="submit"
               className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-md transition-colors"
             >
               <Save size={16} />
-              Save
+              {t('settings.save')}
             </button>
           </div>
         </form>

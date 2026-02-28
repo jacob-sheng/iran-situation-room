@@ -3,6 +3,7 @@ import { Unit, Event, Infrastructure, BattleResult } from '../types';
 import { X, Shield, AlertTriangle, MapPin, Calendar, Info, Factory, Crosshair } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
+import { useI18n } from '../i18n';
 
 interface DetailsPanelProps {
   selectedItem: Unit | Event | Infrastructure | BattleResult | null;
@@ -11,6 +12,7 @@ interface DetailsPanelProps {
 
 export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProps) {
   if (!selectedItem) return null;
+  const { t } = useI18n();
 
   const isUnit = 'type' in selectedItem && 'affiliation' in selectedItem;
   const isEvent = 'severity' in selectedItem;
@@ -46,14 +48,30 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
   const getTitle = () => {
     if ('name' in selectedItem) return selectedItem.name;
     if ('title' in selectedItem) return selectedItem.title;
-    return 'Unknown';
+    return t('details.unknown');
   };
 
   const getSubtitle = () => {
-    if (isUnit) return `Affiliation: ${(selectedItem as Unit).affiliation}`;
-    if (isEvent) return `Severity: ${(selectedItem as Event).severity}`;
-    if (isInfra) return `Status: ${(selectedItem as Infrastructure).status} | ${(selectedItem as Infrastructure).country}`;
-    if (isBattle) return `Type: ${(selectedItem as BattleResult).type}`;
+    if (isUnit) {
+      const u = selectedItem as Unit;
+      const aff = t((`enum.affiliation.${u.affiliation}`) as any);
+      return `${t('details.affiliation')}: ${aff}`;
+    }
+    if (isEvent) {
+      const e = selectedItem as Event;
+      const sev = t((`enum.severity.${e.severity}`) as any);
+      return `${t('details.severity')}: ${sev}`;
+    }
+    if (isInfra) {
+      const i = selectedItem as Infrastructure;
+      const st = t((`enum.infraStatus.${i.status}`) as any);
+      return `${t('details.status')}: ${st} | ${i.country}`;
+    }
+    if (isBattle) {
+      const b = selectedItem as BattleResult;
+      const bt = t((`enum.battleType.${b.type}`) as any);
+      return `${t('details.type')}: ${bt}`;
+    }
     return '';
   };
 
@@ -94,7 +112,7 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
             <div className="flex items-start gap-3 text-sm text-slate-600 dark:text-slate-300">
               <Info size={16} className="text-slate-400 dark:text-slate-500 mt-0.5 shrink-0" />
               <p className="leading-relaxed">
-                {('description' in selectedItem && selectedItem.description) ? selectedItem.description : 'No description available.'}
+                {('description' in selectedItem && selectedItem.description) ? selectedItem.description : t('details.noDescription')}
               </p>
             </div>
 
@@ -115,14 +133,16 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
             {(typeof confidence === 'number' || typeof verified === 'boolean') && (
               <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
                 <span>
-                  {typeof confidence === 'number' ? `Confidence: ${(Math.max(0, Math.min(1, confidence)) * 100).toFixed(0)}%` : ''}
+                  {typeof confidence === 'number'
+                    ? `${t('details.confidence')}: ${(Math.max(0, Math.min(1, confidence)) * 100).toFixed(0)}%`
+                    : ''}
                 </span>
                 {typeof verified === 'boolean' && (
                   <span className={clsx(
                     "uppercase tracking-wider",
                     verified ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
                   )}>
-                    {verified ? 'Verified' : 'Unverified'}
+                    {verified ? t('details.verified') : t('details.unverified')}
                   </span>
                 )}
               </div>
@@ -131,7 +151,7 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
             {Array.isArray(sources) && sources.length > 0 && (
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
                 <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
-                  Sources
+                  {t('details.sources')}
                 </div>
                 <div className="space-y-2">
                   {sources.map((s, idx) => (
@@ -142,7 +162,7 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
                         rel="noopener noreferrer"
                         className="text-cyan-700 dark:text-cyan-300 underline decoration-cyan-500/40 hover:decoration-cyan-500"
                       >
-                        {s.name || 'Source'}
+                        {s.name || t('details.sourceFallback')}
                       </a>
                       {s.timestamp ? (
                         <span className="ml-2 font-mono text-[10px] text-slate-500 dark:text-slate-400">
