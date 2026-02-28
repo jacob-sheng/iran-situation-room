@@ -60,6 +60,9 @@ export const MESSAGES = {
     'errors.missingSettings': 'API Endpoint and Key are required. Please configure them in settings.',
     'errors.refreshFailed': 'Failed to refresh intel.',
 
+    'status.fetchingIntel': 'Fetching intel and rendering, please wait...',
+    'status.translating': 'Translating, please wait...',
+
     'enum.affiliation.iran': 'Iran',
     'enum.affiliation.us': 'US',
     'enum.affiliation.allied': 'Allied',
@@ -138,6 +141,9 @@ export const MESSAGES = {
 
     'errors.missingSettings': '需要 API Endpoint 和 Key，请先在设置中配置。',
     'errors.refreshFailed': '刷新情报失败。',
+
+    'status.fetchingIntel': '正在获取新闻并绘制，请稍候',
+    'status.translating': '正在翻译，请稍候',
 
     'enum.affiliation.iran': '伊朗',
     'enum.affiliation.us': '美国',

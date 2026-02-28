@@ -9,7 +9,7 @@ import { IRAN_COORDINATES, MOCK_ARROWS, MOCK_BATTLE_RESULTS, MOCK_EVENTS, MOCK_I
 import { fetchIntelNews } from './services/llmService';
 import { verifyIntelLocation } from './services/geocodeService';
 import { translateBatchToZh } from './services/translateService';
-import { Moon, RefreshCw, Sun, X } from 'lucide-react';
+import { Loader2, Moon, RefreshCw, Sun, X } from 'lucide-react';
 import { useI18n } from './i18n';
 
 type MapFocus = { coordinates: [number, number]; zoom?: number; key: string } | null;
@@ -126,6 +126,7 @@ export default function App() {
   const dynZhQueueRef = useRef<string[]>([]);
   const dynZhTranslatingRef = useRef(false);
   const [, bumpDynZhVersion] = useState(0);
+  const [isTranslating, setIsTranslating] = useState(false);
 
   const translateText = (text: string) => {
     if (locale !== 'zh') return text;
@@ -164,6 +165,7 @@ export default function App() {
     if (dynZhTranslatingRef.current) return;
     if (localeRef.current !== 'zh') return;
     dynZhTranslatingRef.current = true;
+    setIsTranslating(true);
     try {
       while (dynZhQueueRef.current.length > 0) {
         if (localeRef.current !== 'zh') break;
@@ -201,6 +203,7 @@ export default function App() {
       }
     } finally {
       dynZhTranslatingRef.current = false;
+      setIsTranslating(false);
     }
   }
 
@@ -937,6 +940,9 @@ export default function App() {
         ? t('mobile.layers')
         : t('mobile.details');
 
+  const showFetchingToast = loadingNews;
+  const showTranslatingToast = locale === 'zh' && isTranslating;
+
   return (
     <div className="relative flex h-screen h-dvh w-full bg-slate-50 dark:bg-black text-slate-900 dark:text-slate-200 overflow-hidden font-sans transition-colors duration-300">
       {/* Main Map Area */}
@@ -1136,6 +1142,32 @@ export default function App() {
             </div>
           )}
         </>
+      )}
+
+      {(showFetchingToast || showTranslatingToast) && (
+        <div
+          className={[
+            "pointer-events-none fixed right-4 z-40",
+            isMobile ? "bottom-[calc(env(safe-area-inset-bottom)+5.25rem)]" : "bottom-4",
+          ].join(' ')}
+        >
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/80 backdrop-blur-md shadow-lg px-3 py-2">
+            <div className="flex flex-col gap-1">
+              {showFetchingToast && (
+                <div className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-200">
+                  <RefreshCw size={14} className="animate-spin text-cyan-600 dark:text-cyan-400" />
+                  <span>{t('status.fetchingIntel')}</span>
+                </div>
+              )}
+              {showTranslatingToast && (
+                <div className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-200">
+                  <Loader2 size={14} className="animate-spin text-amber-600 dark:text-amber-400" />
+                  <span>{t('status.translating')}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {showSettings && (
