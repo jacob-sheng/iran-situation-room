@@ -12,6 +12,7 @@ export const MESSAGES = {
 
     'news.title': 'Live Intel',
     'news.apiSettings': 'API settings',
+    'news.github': 'GitHub repo',
     'news.refreshNews': 'Refresh news',
     'news.configureFirst': 'Please configure API settings first.',
     'news.openSettings': 'Open settings',
@@ -90,6 +91,7 @@ export const MESSAGES = {
 
     'news.title': '实时情报',
     'news.apiSettings': 'API 设置',
+    'news.github': 'GitHub 仓库',
     'news.refreshNews': '刷新新闻',
     'news.configureFirst': '请先配置 API 设置。',
     'news.openSettings': '打开设置',

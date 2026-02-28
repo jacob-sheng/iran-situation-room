@@ -1,6 +1,6 @@
 import React from 'react';
 import { IntelNewsItem, LLMSettings } from '../types';
-import { Activity, ExternalLink, MapPin, RefreshCw, Settings } from 'lucide-react';
+import { Activity, ExternalLink, Github, MapPin, RefreshCw, Settings } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useI18n } from '../i18n';
 import clsx from 'clsx';
@@ -53,6 +53,16 @@ export default function NewsPanel({
           >
             <Settings size={16} />
           </button>
+          <a
+            href="https://github.com/jacob-sheng/iran-situation-room"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+            title={t('news.github')}
+            aria-label={t('news.github')}
+          >
+            <Github size={16} />
+          </a>
           <button
             onClick={onRefresh}
             disabled={loading || !settings.endpoint || !settings.apiKey}
