@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ComposableMap,
   Geographies,
@@ -45,6 +45,17 @@ export default function MapDashboard({
   onSelectBattleResult
 }: MapDashboardProps) {
   const [position, setPosition] = useState({ coordinates: IRAN_COORDINATES, zoom: 4 });
+  const [hoveredCountryGroup, setHoveredCountryGroup] = useState<'china-taiwan' | null>(null);
+  const clearHoverTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (clearHoverTimerRef.current !== null) {
+        window.clearTimeout(clearHoverTimerRef.current);
+        clearHoverTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!focus) return;
@@ -118,31 +129,66 @@ export default function MapDashboard({
           <Geographies geography={geoUrl}>
             {({ geographies }) =>
               geographies.map((geo) => {
+                const geoId = String((geo as any).id ?? '');
                 const isIran = geo.properties.name === 'Iran';
-                const isTaiwan = geo.properties.name === 'Taiwan';
+                const isChina = geoId === '156' || geo.properties.name === 'China';
+                const isTaiwan = geoId === '158' || geo.properties.name === 'Taiwan';
+                const isChinaTaiwan = isChina || isTaiwan;
+                const isChinaTaiwanHovered = hoveredCountryGroup === 'china-taiwan';
+
+                const baseFill = isIran ? 'rgba(6, 182, 212, 0.15)' : 'var(--color-slate-200, #e2e8f0)';
+                const hoverFill = isIran ? 'rgba(6, 182, 212, 0.25)' : 'var(--color-slate-300, #cbd5e1)';
+                const effectiveFill = isChinaTaiwan && isChinaTaiwanHovered ? hoverFill : baseFill;
+
+                const defaultStroke =
+                  isTaiwan
+                    ? 'transparent'
+                    : (isIran ? '#06b6d4' : (isChinaTaiwan && isChinaTaiwanHovered ? 'var(--color-slate-400, #94a3b8)' : 'var(--color-slate-300, #cbd5e1)'));
+                const hoverStroke = isTaiwan ? 'transparent' : (isIran ? '#06b6d4' : 'var(--color-slate-400, #94a3b8)');
+
+                const handleEnter = () => {
+                  if (!isChinaTaiwan) return;
+                  if (clearHoverTimerRef.current !== null) {
+                    window.clearTimeout(clearHoverTimerRef.current);
+                    clearHoverTimerRef.current = null;
+                  }
+                  setHoveredCountryGroup('china-taiwan');
+                };
+
+                const handleLeave = () => {
+                  if (!isChinaTaiwan) return;
+                  if (clearHoverTimerRef.current !== null) {
+                    window.clearTimeout(clearHoverTimerRef.current);
+                  }
+                  // Defer clearing by one tick so moving between China <-> Taiwan doesn't flash.
+                  clearHoverTimerRef.current = window.setTimeout(() => {
+                    clearHoverTimerRef.current = null;
+                    setHoveredCountryGroup(null);
+                  }, 0);
+                };
                 return (
                   <Geography
                     key={geo.rsmKey}
                     geography={geo}
                     className="outline-none transition-colors duration-300"
+                    onMouseEnter={handleEnter}
+                    onMouseLeave={handleLeave}
                     style={{
                       default: { 
-                        fill: isIran ? 'rgba(6, 182, 212, 0.15)' : 'var(--color-slate-200, #e2e8f0)',
-                        // Merge Taiwan visually into China: keep fill, drop stroke & hover interactions.
-                        stroke: isTaiwan ? 'transparent' : (isIran ? '#06b6d4' : 'var(--color-slate-300, #cbd5e1)'),
+                        fill: effectiveFill,
+                        // Merge Taiwan visually into China: drop Taiwan stroke but keep hover in sync.
+                        stroke: defaultStroke,
                         strokeWidth: isTaiwan ? 0 : (isIran ? 1 : 0.5),
-                        pointerEvents: isTaiwan ? 'none' : 'auto',
+                        pointerEvents: 'auto',
                         outline: 'none'
                       },
                       hover: { 
-                        fill: isTaiwan
-                          ? 'var(--color-slate-200, #e2e8f0)'
-                          : (isIran ? 'rgba(6, 182, 212, 0.25)' : 'var(--color-slate-300, #cbd5e1)'),
-                        stroke: isTaiwan ? 'transparent' : (isIran ? '#06b6d4' : 'var(--color-slate-400, #94a3b8)'),
-                        pointerEvents: isTaiwan ? 'none' : 'auto',
+                        fill: hoverFill,
+                        stroke: hoverStroke,
+                        pointerEvents: 'auto',
                         outline: 'none' 
                       },
-                      pressed: { outline: 'none', pointerEvents: isTaiwan ? 'none' : 'auto' }
+                      pressed: { outline: 'none', pointerEvents: 'auto' }
                     }}
                   />
                 );
