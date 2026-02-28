@@ -59,14 +59,11 @@
 2. Preview:
    `npm run preview -- --host 0.0.0.0 --port 4173`
 
-## Zeabur 一键部署（占位模板）
-> 当前环境无法稳定访问 Zeabur GraphQL 网关获取模板 code，先放可回填的占位版本。
+## Zeabur 一键部署
+[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/90RO4H?referralCode=jacob-sheng)
 
-[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/ZEABUR_TEMPLATE_ID?referralCode=jacob-sheng)
-
-回填方式：
-- 发布 Template 后会得到链接：`https://zeabur.com/templates/<template-id>`
-- 用真实 `<template-id>` 替换 `ZEABUR_TEMPLATE_ID`，提交并推送即可
+模板链接：
+- https://zeabur.com/templates/90RO4H
 
 ## Zeabur 手动部署
 1. 在 Zeabur 创建 Project，并连接 GitHub 仓库 `jacob-sheng/iran-situation-room`

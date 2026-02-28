@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://schema.zeabur.app/template.json
+apiVersion: zeabur.com/v1
+kind: Template
+metadata:
+  name: Iran Situation Room
+spec:
+  description: A modern, tech-themed dashboard visualizing the current situation in Iran with real-time news updates.
+  tags:
+    - Vite
+    - React
+    - Dashboard
+  readme: |-
+    # Iran Situation Room (Zeabur)
+
+    ## After deployment
+    1. Open the service URL
+    2. Click the settings button in the right panel (Live Intel)
+    3. Fill `endpoint / apiKey / model` for your OpenAI-compatible provider
+
+    ## Notes
+    - No server-side secrets are required for the web app itself.
+    - The API key is stored in browser localStorage.
+  services:
+    - name: web
+      template: GIT
+      spec:
+        source:
+          source: GITHUB
+          repo: 1169225388
+          branch: main
+          rootDirectory: /
+          dockerfile: |-
+            FROM node:20-bookworm-slim AS build
+            WORKDIR /app
+            COPY package.json package-lock.json ./
+            RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+            RUN npm ci
+            COPY . .
+            RUN npm run build
+
+            FROM nginx:stable-alpine
+            COPY --from=build /app/dist /usr/share/nginx/html
+            RUN cat > /etc/nginx/conf.d/default.conf <<'EOF'
+            server {
+              listen 80;
+              server_name _;
+              root /usr/share/nginx/html;
+
+              location / {
+                try_files $uri $uri/ /index.html;
+              }
+            }
+            EOF
+        ports:
+          - id: web
+            port: 80
+            type: HTTP
