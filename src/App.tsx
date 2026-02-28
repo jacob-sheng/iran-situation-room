@@ -919,7 +919,72 @@ export default function App() {
     if (coords) {
       setFocus({ coordinates: coords, zoom: 5, key: `news:${id}:${Date.now()}` });
     }
-    if (isMobile) setMobileSheet('none');
+
+    let primary: Unit | Event | Infrastructure | BattleResult | null = null;
+    if (item && best) {
+      const resolvedCoords = (best.movement?.to?.coordinates || best.location.coordinates || coords || IRAN_COORDINATES) as [number, number];
+
+      if (best.kind === 'infrastructure') {
+        const targetId = `intel-infra:${item.id}:${best.id}`;
+        primary = allInfrastructure.find(x => x.id === targetId) || null;
+        if (!primary) {
+          const t = best.infra?.type ? asInfraType(best.infra.type) : guessInfraType(best.title);
+          const status = best.infra?.status ? best.infra.status : guessInfraStatus(best.title, best.severity);
+          primary = {
+            id: targetId,
+            name: String(best.infra?.name || best.title || 'Infrastructure'),
+            type: t,
+            country: best.location.country || 'Unknown',
+            status,
+            description: best.description,
+            coordinates: resolvedCoords,
+            sources: [buildSourceRef(item)],
+            newsId: item.id,
+            confidence: clamp01(best.confidence),
+            verified: best.verified,
+          };
+        }
+      } else if (best.kind === 'battle') {
+        const targetId = `intel-battle:${item.id}:${best.id}`;
+        primary = allBattleResults.find(x => x.id === targetId) || null;
+        if (!primary) {
+          primary = {
+            id: targetId,
+            title: best.title,
+            type: best.battle?.type === 'kill' || best.battle?.type === 'strike' || best.battle?.type === 'capture'
+              ? best.battle.type
+              : 'strike',
+            date: item.timestamp || new Date().toISOString(),
+            coordinates: resolvedCoords,
+            description: best.description,
+            sources: [buildSourceRef(item)],
+            newsId: item.id,
+            confidence: clamp01(best.confidence),
+            verified: best.verified,
+          };
+        }
+      } else {
+        const targetId = `intel-event:${item.id}:${best.id}`;
+        primary = allEvents.find(x => x.id === targetId) || null;
+        if (!primary) {
+          primary = {
+            id: targetId,
+            title: best.title,
+            date: item.timestamp || new Date().toISOString(),
+            description: best.description,
+            severity: best.severity,
+            coordinates: resolvedCoords,
+            sources: [buildSourceRef(item)],
+            newsId: item.id,
+            confidence: clamp01(best.confidence),
+            verified: best.verified,
+          };
+        }
+      }
+    }
+
+    setSelectedItem(primary);
+    if (isMobile) setMobileSheet(primary ? 'details' : 'none');
   }
 
   function handleSelectItem(item: Unit | Event | Infrastructure | BattleResult | null) {
