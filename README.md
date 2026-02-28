@@ -46,6 +46,7 @@
 1. Install dependencies:
    `npm install`
    - CI/Zeabur 等严格依赖解析环境建议使用：`npm ci --legacy-peer-deps`
+   - 本仓库包含 `.npmrc`（`legacy-peer-deps=true`），即使 Zeabur 默认使用 `npm install` 也不会因 peer deps 冲突而失败
 2. Run the app:
    `npm run dev`
 
