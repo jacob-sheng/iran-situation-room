@@ -1,6 +1,7 @@
 # Iran Situation Room
 
 一个现代、科技感的态势可视化仪表盘：左侧地图展示单位/事件/基础设施/战果等图层，右侧 `Live Intel` 通过可配置的 OpenAI 兼容接口拉取并汇总最新新闻。
+https://war.isroot.in
 
 ## 功能
 - 地图态势：Units / Events / Movements / Labels / Infrastructure / Battle Results 多图层开关
