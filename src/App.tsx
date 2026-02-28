@@ -143,6 +143,8 @@ export default function App() {
 
   const refreshSeq = useRef(0);
   const moveSeq = useRef(0);
+  const refreshCountRef = useRef(0);
+  const seenNewsUrlsRef = useRef<Set<string>>(new Set());
   const autoRefreshDone = useRef(false);
 
   const [selectedItem, setSelectedItem] = useState<Unit | Event | Infrastructure | BattleResult | null>(null);
@@ -589,7 +591,9 @@ export default function App() {
     setNewsError(null);
     try {
       const MAX_NEWS_ITEMS = 100;
-      const freshAll = await fetchIntelNews(llmSettings);
+      const mode = refreshCountRef.current === 0 ? 'initial' : 'refresh';
+      const excludeUrls = Array.from(seenNewsUrlsRef.current);
+      const freshAll = await fetchIntelNews(llmSettings, { mode, excludeUrls, targetCount: 10 });
       if (refreshSeq.current !== token) return;
 
       // Dedupe within the freshly fetched batch by URL (keep first occurrence).
@@ -616,6 +620,11 @@ export default function App() {
       setIntelNews(merged);
       intelNewsRef.current = merged;
       setLatestBatchSize(fresh.length);
+      for (const item of freshCanonical) {
+        const url = String(item?.url || '').trim();
+        if (url) seenNewsUrlsRef.current.add(url);
+      }
+      refreshCountRef.current += 1;
 
       // Derive clickable layers from signals and kick off sourced unit movement.
       const derived = deriveIntelLayersFromNews(merged);

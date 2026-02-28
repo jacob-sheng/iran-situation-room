@@ -18,6 +18,30 @@ const RSS_SOURCES: RssSource[] = [
   { name: 'UN News', url: 'https://news.un.org/feed/subscribe/en/news/all/rss.xml' },
 ];
 
+function canonicalizeUrl(url: string) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    u.hash = '';
+    const params = u.searchParams;
+    // Remove common tracking params.
+    for (const key of Array.from(params.keys())) {
+      const lower = key.toLowerCase();
+      if (lower.startsWith('utm_')) params.delete(key);
+    }
+    params.delete('fbclid');
+    params.delete('gclid');
+    params.delete('igshid');
+    params.delete('mc_cid');
+    params.delete('mc_eid');
+    return u.toString();
+  } catch {
+    // Best-effort fallback: strip fragment only.
+    return raw.split('#')[0].trim();
+  }
+}
+
 // Stable hash for IDs derived from URLs (keeps selection stable across refreshes).
 function fnv1a32(input: string) {
   let hash = 0x811c9dc5;
@@ -136,7 +160,7 @@ function parseXmlFeed(xmlText: string, source: string) {
   if (rssItems.length > 0) {
     for (const item of rssItems) {
       const title = pickText(item, ['title']);
-      const link = pickText(item, ['link']);
+      const link = canonicalizeUrl(pickText(item, ['link']));
       const pubDate = pickText(item, ['pubDate', 'dc:date']);
       const snippet = stripHtml(pickText(item, ['description', 'content:encoded']));
       if (!title || !link) continue;
@@ -154,30 +178,30 @@ function parseXmlFeed(xmlText: string, source: string) {
       entry.querySelector('link[rel="alternate"][href]') ||
       entry.querySelector('link[href]') ||
       entry.querySelector('link');
-    const link = String((linkEl as any)?.getAttribute?.('href') || linkEl?.textContent || '').trim();
+    const link = canonicalizeUrl(String((linkEl as any)?.getAttribute?.('href') || linkEl?.textContent || '').trim());
     if (!title || !link) continue;
     out.push({ title, link, pubDate, snippet, source });
   }
   return out;
 }
 
-async function fetchFeedViaRss2Json(src: RssSource) {
-  const api = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(src.url)}`;
+async function fetchFeedViaRss2Json(src: RssSource, limit: number) {
+  const api = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(src.url)}&count=${encodeURIComponent(String(limit))}`;
   const res = await fetchWithTimeout(api, { headers: { 'accept': 'application/json' } }, 8000);
   const data = await res.json();
   if (!data || data.status !== 'ok' || !Array.isArray(data.items)) {
     throw new Error('rss2json error');
   }
-  return data.items.slice(0, 10).map((item: any) => {
+  return data.items.slice(0, limit).map((item: any) => {
     const title = String(item?.title || '').trim();
-    const link = String(item?.link || '').trim();
+    const link = canonicalizeUrl(String(item?.link || '').trim());
     const pubDate = String(item?.pubDate || item?.publishedDate || item?.date || '').trim();
     const snippet = stripHtml(String(item?.description || item?.content || ''));
     return { title, link, pubDate, snippet, source: src.name };
   }).filter((a: any) => a.title && a.link);
 }
 
-async function fetchFeedViaAllOrigins(src: RssSource) {
+async function fetchFeedViaAllOrigins(src: RssSource, limit: number) {
   const target = `https://api.allorigins.win/raw?url=${encodeURIComponent(src.url)}`;
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -186,7 +210,7 @@ async function fetchFeedViaAllOrigins(src: RssSource) {
       const text = await res.text();
       // Some sources return HTML error pages; the XML parser will reject them.
       const parsed = parseXmlFeed(text, src.name);
-      return parsed.slice(0, 10);
+      return parsed.slice(0, limit);
     } catch (e) {
       lastErr = e;
       await sleep(500 + attempt * 750);
@@ -195,14 +219,14 @@ async function fetchFeedViaAllOrigins(src: RssSource) {
   throw lastErr || new Error('allorigins error');
 }
 
-async function fetchFeedItems(src: RssSource) {
+async function fetchFeedItems(src: RssSource, limit: number) {
   try {
-    const via = await fetchFeedViaRss2Json(src);
+    const via = await fetchFeedViaRss2Json(src, limit);
     if (via.length > 0) return via;
   } catch {
     // fall through
   }
-  return await fetchFeedViaAllOrigins(src);
+  return await fetchFeedViaAllOrigins(src, limit);
 }
 
 function parseDateMs(ts: string) {
@@ -210,14 +234,20 @@ function parseDateMs(ts: string) {
   return Number.isFinite(n) ? n : 0;
 }
 
-async function fetchRssArticles(): Promise<RssArticle[]> {
-  const settled = await Promise.allSettled(RSS_SOURCES.map(s => fetchFeedItems(s)));
+type FetchRssArticlesOptions = { perSourceLimit: number; maxTotal: number; excludeUrls?: Set<string> };
+
+async function fetchRssArticles(opts: FetchRssArticlesOptions): Promise<RssArticle[]> {
+  const perSourceLimit = Math.max(1, Math.floor(opts.perSourceLimit));
+  const maxTotal = Math.max(1, Math.floor(opts.maxTotal));
+  const exclude = opts.excludeUrls || new Set<string>();
+
+  const settled = await Promise.allSettled(RSS_SOURCES.map(s => fetchFeedItems(s, perSourceLimit)));
   const flat: Array<Omit<RssArticle, 'index'>> = [];
   for (const r of settled) {
     if (r.status !== 'fulfilled') continue;
     for (const it of r.value) {
       const title = String(it?.title || '').trim();
-      const link = String(it?.link || '').trim();
+      const link = canonicalizeUrl(String(it?.link || '').trim());
       const pubDate = String(it?.pubDate || '').trim();
       const snippet = String(it?.snippet || '').trim();
       const source = String(it?.source || '').trim();
@@ -229,27 +259,45 @@ async function fetchRssArticles(): Promise<RssArticle[]> {
   const byLink = new Map<string, Omit<RssArticle, 'index'>>();
   for (const it of flat) {
     const key = it.link;
+    if (!key || exclude.has(key)) continue;
     if (!byLink.has(key)) byLink.set(key, it);
   }
 
   const list = Array.from(byLink.values());
   list.sort((a, b) => parseDateMs(b.pubDate) - parseDateMs(a.pubDate));
 
-  // Keep the LLM input bounded.
-  return list.slice(0, 30).map((it, index) => ({ index, ...it }));
+  return list.slice(0, maxTotal).map((it, index) => ({ index, ...it }));
 }
 
-export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsItem[]> {
+export type FetchIntelNewsOptions = {
+  mode?: 'initial' | 'refresh';
+  excludeUrls?: string[];
+  targetCount?: number;
+};
+
+export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNewsOptions = {}): Promise<IntelNewsItem[]> {
   if (!settings.endpoint || !settings.apiKey) {
     throw new Error('API Endpoint and Key are required. Please configure them in settings.');
   }
 
+  const targetCount = Math.max(1, Math.floor(opts.targetCount ?? 10));
+  const mode = opts.mode === 'initial' ? 'initial' : 'refresh';
+  const exclude = new Set((opts.excludeUrls || []).map(u => canonicalizeUrl(u)).filter(Boolean));
+
+  const depthCandidates = mode === 'initial' ? [20, 40, 80] : [10, 20, 40, 80];
+
   let rssArticles: RssArticle[] = [];
-  try {
-    rssArticles = await fetchRssArticles();
-  } catch {
-    // Ignore RSS errors and let the LLM rely on its own knowledge (lower quality).
-    rssArticles = [];
+  for (const depth of depthCandidates) {
+    try {
+      const pool = await fetchRssArticles({ perSourceLimit: depth, maxTotal: 400, excludeUrls: exclude });
+      if (pool.length >= targetCount) {
+        rssArticles = pool.slice(0, targetCount);
+        break;
+      }
+      rssArticles = pool;
+    } catch {
+      rssArticles = [];
+    }
   }
 
   const allowedUrls = new Set(rssArticles.map(a => a.link));
@@ -260,8 +308,12 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
 
   const system = [
     'You are a military intelligence analyst.',
-    'You will be given up to 30 RSS articles about the Middle East / Iran situation from multiple sources.',
-    'Pick the 10 most important items and return ONLY a valid JSON array (no markdown).',
+    hasRss
+      ? `You will be given ${rssArticles.length} RSS articles about the Middle East / Iran situation from multiple sources.`
+      : 'RSS articles may be unavailable; use credible source URLs.',
+    hasRss
+      ? `Generate exactly ${rssArticles.length} news items (one per provided RSS article) and return ONLY a valid JSON array (no markdown).`
+      : `Generate ${targetCount} news items and return ONLY a valid JSON array (no markdown).`,
     '',
     'Each news item MUST be an object with keys:',
     '- id (string)',
@@ -291,6 +343,7 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
     'Notes:',
     '- coordinates MUST be [longitude, latitude].',
     hasRss ? '- url MUST come from the provided RSS links list. Do not invent URLs.' : '- If no RSS links are provided, use credible source URLs.',
+    hasRss ? '- Keep url and source exactly as provided for each article.' : '- Provide a working url for each item.',
     '- If kind="movement", include movement.to (it can be the same as location).',
     '- Do not include any markdown formatting like ```json.',
   ].join('\n');
@@ -342,13 +395,13 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
 
   if (!Array.isArray(parsed)) return [];
 
-  const out: IntelNewsItem[] = [];
+  const outByUrl = new Map<string, IntelNewsItem>();
   for (let i = 0; i < parsed.length; i++) {
     const raw = parsed[i] || {};
     const title = String(raw.title || '').trim();
     const summary = String(raw.summary || '').trim();
     let source = String(raw.source || '').trim();
-    let url = String(raw.url || '').trim();
+    let url = canonicalizeUrl(String(raw.url || '').trim());
     const timestamp = String(raw.timestamp || '').trim();
     const fallbackId = String(raw.id || `news-${i}`).trim() || `news-${i}`;
 
@@ -357,6 +410,8 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
       if (picked) url = picked;
     }
     if (!url && rssArticles[i]?.link) url = rssArticles[i].link;
+
+    if (allowedUrls.size > 0 && (!url || !allowedUrls.has(url))) continue;
 
     const stableId = stableNewsIdFromUrl(url) || fallbackId;
 
@@ -419,7 +474,7 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
       });
     }
 
-    out.push({
+    const item: IntelNewsItem = {
       id: stableId,
       title,
       summary,
@@ -427,10 +482,53 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
       url,
       timestamp,
       signals,
+    };
+
+    if (url && !outByUrl.has(url)) outByUrl.set(url, item);
+  }
+
+  if (!hasRss) {
+    const list = Array.from(outByUrl.values());
+    return list.slice(0, targetCount);
+  }
+
+  const final: IntelNewsItem[] = [];
+  for (let i = 0; i < rssArticles.length; i++) {
+    const a = rssArticles[i];
+    const existing = outByUrl.get(a.link);
+    if (existing) {
+      final.push(existing);
+      continue;
+    }
+
+    const stableId = stableNewsIdFromUrl(a.link) || `news-fallback-${i}`;
+    const snippet = a.snippet || '';
+    final.push({
+      id: stableId,
+      title: a.title,
+      summary: snippet ? snippet.slice(0, 220) : '',
+      source: a.source || 'Unknown',
+      url: a.link,
+      timestamp: a.pubDate || new Date().toISOString(),
+      signals: [
+        {
+          id: `sig-${stableId}-0`,
+          kind: 'event',
+          title: a.title || 'Intel Update',
+          description: snippet ? snippet.slice(0, 300) : '',
+          severity: 'low',
+          location: {
+            name: 'Iran',
+            coordinates: FALLBACK_IRAN_COORDINATES,
+          },
+          evidence: snippet.slice(0, 120),
+          confidence: 0.05,
+        },
+      ],
     });
   }
 
-  return out.slice(0, 10);
+  return final.slice(0, targetCount);
 }
 
 export async function fetchLatestNews(settings: LLMSettings): Promise<NewsItem[]> {
