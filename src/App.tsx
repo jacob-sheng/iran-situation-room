@@ -1,12 +1,80 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import MapDashboard from './components/MapDashboard';
 import NewsPanel from './components/NewsPanel';
 import ControlPanel from './components/ControlPanel';
 import DetailsPanel from './components/DetailsPanel';
 import SettingsModal from './components/SettingsModal';
-import { MapFilters, Unit, Event, Infrastructure, BattleResult, LLMSettings } from './types';
-import { MOCK_UNITS, MOCK_EVENTS, MOCK_INFRASTRUCTURE, MOCK_BATTLE_RESULTS } from './constants';
+import { Arrow, BattleResult, Event, Infrastructure, IntelNewsItem, IntelSignal, LLMSettings, MapFilters, SourceRef, Unit } from './types';
+import { IRAN_COORDINATES, MOCK_ARROWS, MOCK_BATTLE_RESULTS, MOCK_EVENTS, MOCK_INFRASTRUCTURE, MOCK_UNITS } from './constants';
+import { fetchIntelNews } from './services/llmService';
+import { verifyIntelLocation } from './services/geocodeService';
 import { Activity, Moon, Sun } from 'lucide-react';
+
+type MapFocus = { coordinates: [number, number]; zoom?: number; key: string } | null;
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function parseTimestamp(ts: string, fallback: number) {
+  const n = Date.parse(ts);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clamp01(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function slugify(input: string) {
+  return String(input || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+function mergeSources(existing: SourceRef[] | undefined, add: SourceRef) {
+  const out = Array.isArray(existing) ? [...existing] : [];
+  if (!out.some(s => s.url === add.url)) out.push(add);
+  return out;
+}
+
+function asUnitType(input: any): Unit['type'] {
+  if (input === 'military' || input === 'naval' || input === 'air' || input === 'base') return input;
+  return 'military';
+}
+
+function asAffiliation(input: any): Unit['affiliation'] {
+  if (input === 'iran' || input === 'us' || input === 'allied' || input === 'israel' || input === 'other') return input;
+  return 'other';
+}
+
+function asInfraType(input: any): Infrastructure['type'] {
+  if (input === 'oil' || input === 'nuclear' || input === 'military_base' || input === 'civilian') return input;
+  return 'military_base';
+}
+
+function guessInfraType(title: string) {
+  const t = title.toLowerCase();
+  if (t.includes('oil') || t.includes('pipeline') || t.includes('refinery')) return 'oil' as const;
+  if (t.includes('nuclear') || t.includes('uranium') || t.includes('enrichment')) return 'nuclear' as const;
+  if (t.includes('airport') || t.includes('port') || t.includes('terminal')) return 'civilian' as const;
+  return 'military_base' as const;
+}
+
+function guessInfraStatus(title: string, severity: IntelSignal['severity']): Infrastructure['status'] {
+  const t = title.toLowerCase();
+  if (t.includes('destroy') || t.includes('flatten') || t.includes('obliterate')) return 'destroyed';
+  if (t.includes('damage') || t.includes('hit') || t.includes('strike')) return 'damaged';
+  if (severity === 'high') return 'damaged';
+  return 'intact';
+}
+
+function pickBestSignal(signals: IntelSignal[]) {
+  if (!Array.isArray(signals) || signals.length === 0) return null;
+  return [...signals].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0] || null;
+}
 
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -26,7 +94,26 @@ export default function App() {
     showBattleResults: true,
   });
 
-  const [units, setUnits] = useState<Unit[]>(MOCK_UNITS);
+  const [units, setUnits] = useState<Unit[]>(() => MOCK_UNITS.map(u => ({ ...u, velocity: undefined })));
+  const unitsRef = useRef<Unit[]>(units);
+  useEffect(() => {
+    unitsRef.current = units;
+  }, [units]);
+
+  const [intelNews, setIntelNews] = useState<IntelNewsItem[]>([]);
+  const [loadingNews, setLoadingNews] = useState(false);
+  const [newsError, setNewsError] = useState<string | null>(null);
+  const [selectedNewsId, setSelectedNewsId] = useState<string | null>(null);
+  const [focus, setFocus] = useState<MapFocus>(null);
+
+  const [intelEvents, setIntelEvents] = useState<Event[]>([]);
+  const [intelInfrastructure, setIntelInfrastructure] = useState<Infrastructure[]>([]);
+  const [intelBattleResults, setIntelBattleResults] = useState<BattleResult[]>([]);
+  const [intelArrows, setIntelArrows] = useState<Arrow[]>([]);
+
+  const refreshSeq = useRef(0);
+  const moveSeq = useRef(0);
+
   const [selectedItem, setSelectedItem] = useState<Unit | Event | Infrastructure | BattleResult | null>(null);
 
   // Handle dark mode class on root
@@ -55,33 +142,503 @@ export default function App() {
     localStorage.setItem('llmSettings', JSON.stringify(newSettings));
   };
 
-  // Simulate unit movement
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setUnits(prevUnits => prevUnits.map(unit => {
-        if (!unit.velocity) return unit;
-        
-        let [vx, vy] = unit.velocity;
-        let [x, y] = unit.coordinates;
-        
-        const newHistory = [...(unit.pathHistory || []), [x, y] as [number, number]];
-        if (newHistory.length > 20) {
-          newHistory.shift();
-        }
-        
-        x += vx;
-        y += vy;
-        
-        // Simple bounding box to make them bounce back and forth
-        if (x > 58 || x < 48) vx = -vx;
-        if (y > 30 || y < 24) vy = -vy;
-        
-        return { ...unit, coordinates: [x, y], velocity: [vx, vy], pathHistory: newHistory };
-      }));
-    }, 1000); // Update every second
+  const allEvents = useMemo(() => [...MOCK_EVENTS, ...intelEvents], [intelEvents]);
+  const allInfrastructure = useMemo(() => [...MOCK_INFRASTRUCTURE, ...intelInfrastructure], [intelInfrastructure]);
+  const allBattleResults = useMemo(() => [...MOCK_BATTLE_RESULTS, ...intelBattleResults], [intelBattleResults]);
+  const allArrows = useMemo(() => [...MOCK_ARROWS, ...intelArrows], [intelArrows]);
 
-    return () => clearInterval(interval);
-  }, []);
+  function buildSourceRef(item: IntelNewsItem): SourceRef {
+    return {
+      name: item.source || 'Source',
+      url: item.url,
+      timestamp: item.timestamp || new Date().toISOString(),
+    };
+  }
+
+  function deriveIntelLayersFromNews(news: IntelNewsItem[]) {
+    const events: Event[] = [];
+    const infrastructure: Infrastructure[] = [];
+    const battleResults: BattleResult[] = [];
+
+    for (const item of news) {
+      const src = buildSourceRef(item);
+      for (const signal of item.signals || []) {
+        const coords = signal.movement?.to?.coordinates || signal.location.coordinates;
+        if (!coords) continue;
+
+        if (signal.kind === 'event') {
+          events.push({
+            id: `intel-event:${item.id}:${signal.id}`,
+            title: signal.title,
+            date: item.timestamp || new Date().toISOString(),
+            description: signal.description,
+            severity: signal.severity,
+            coordinates: coords,
+            sources: [src],
+            newsId: item.id,
+            confidence: clamp01(signal.confidence),
+            verified: signal.verified,
+          });
+        } else if (signal.kind === 'infrastructure') {
+          const t = signal.infra?.type ? asInfraType(signal.infra.type) : guessInfraType(signal.title);
+          const status = signal.infra?.status ? signal.infra.status : guessInfraStatus(signal.title, signal.severity);
+          infrastructure.push({
+            id: `intel-infra:${item.id}:${signal.id}`,
+            name: String(signal.infra?.name || signal.title || 'Infrastructure'),
+            type: t,
+            country: signal.location.country || 'Unknown',
+            status,
+            description: signal.description,
+            coordinates: coords,
+            sources: [src],
+            newsId: item.id,
+            confidence: clamp01(signal.confidence),
+            verified: signal.verified,
+          });
+        } else if (signal.kind === 'battle') {
+          battleResults.push({
+            id: `intel-battle:${item.id}:${signal.id}`,
+            title: signal.title,
+            type: signal.battle?.type === 'kill' || signal.battle?.type === 'strike' || signal.battle?.type === 'capture'
+              ? signal.battle.type
+              : 'strike',
+            date: item.timestamp || new Date().toISOString(),
+            coordinates: coords,
+            description: signal.description,
+            sources: [src],
+            newsId: item.id,
+            confidence: clamp01(signal.confidence),
+            verified: signal.verified,
+          });
+        } else if (signal.kind === 'movement') {
+          // If the movement isn't tied to a unit, drop an event marker so the news always maps to a clickable icon.
+          if (!signal.unit?.id && !signal.unit?.name) {
+            events.push({
+              id: `intel-event:${item.id}:${signal.id}`,
+              title: signal.title,
+              date: item.timestamp || new Date().toISOString(),
+              description: signal.description,
+              severity: signal.severity,
+              coordinates: coords,
+              sources: [src],
+              newsId: item.id,
+              confidence: clamp01(signal.confidence),
+              verified: signal.verified,
+            });
+          }
+        } else if (signal.kind === 'unit') {
+          // Unit signals will be represented as actual units in applyIntelSignalsToUnits().
+        }
+      }
+    }
+
+    return { events, infrastructure, battleResults };
+  }
+
+  async function animateUnitTo(
+    unitId: string,
+    from: [number, number],
+    to: [number, number],
+    meta: { newsId: string; source: SourceRef; confidence: number; verified?: boolean },
+    token: number
+  ) {
+    const steps = 30;
+    const durationMs = 1500;
+    const stepMs = Math.max(16, Math.floor(durationMs / steps));
+
+    const [fx, fy] = from;
+    const [tx, ty] = to;
+
+    if (fx === tx && fy === ty) {
+      setUnits(prev => prev.map(u => {
+        if (u.id !== unitId) return u;
+        return {
+          ...u,
+          coordinates: to,
+          newsId: meta.newsId,
+          sources: mergeSources(u.sources, meta.source),
+          confidence: clamp01(meta.confidence),
+          verified: typeof meta.verified === 'boolean' ? meta.verified : u.verified,
+        };
+      }));
+      return;
+    }
+
+    for (let i = 1; i <= steps; i++) {
+      if (moveSeq.current !== token) return;
+      const t = i / steps;
+      const nx = fx + (tx - fx) * t;
+      const ny = fy + (ty - fy) * t;
+
+      setUnits(prev => prev.map(u => {
+        if (u.id !== unitId) return u;
+        const next: Unit = {
+          ...u,
+          coordinates: [nx, ny],
+          newsId: meta.newsId,
+          sources: mergeSources(u.sources, meta.source),
+          confidence: clamp01(meta.confidence),
+          verified: typeof meta.verified === 'boolean' ? meta.verified : u.verified,
+        };
+
+        // Add to path history every 2 ticks to keep the trail smooth but bounded.
+        if (i % 2 === 0) {
+          const hist = Array.isArray(u.pathHistory) ? [...u.pathHistory] : [];
+          hist.push([nx, ny]);
+          while (hist.length > 60) hist.shift();
+          next.pathHistory = hist;
+        }
+
+        return next;
+      }));
+
+      await sleep(stepMs);
+    }
+  }
+
+  function applyIntelSignalsToUnitsAndArrows(news: IntelNewsItem[], { animate }: { animate: boolean }) {
+    const currentUnits = unitsRef.current;
+    const unitsById = new Map(currentUnits.map(u => [u.id, u] as const));
+    const unitsByName = new Map(currentUnits.map(u => [u.name.toLowerCase(), u] as const));
+
+    const plannedUnits: Unit[] = [...currentUnits];
+    const posById = new Map<string, [number, number]>(currentUnits.map(u => [u.id, u.coordinates] as const));
+
+    type MoveStep = {
+      unitId: string;
+      from: [number, number];
+      to: [number, number];
+      newsId: string;
+      source: SourceRef;
+      confidence: number;
+      verified?: boolean;
+      label: string;
+      affiliation?: Unit['affiliation'];
+    };
+
+    const movesByUnitId = new Map<string, MoveStep[]>();
+    const arrows: Arrow[] = [];
+
+    const flat: Array<{ at: number; order: number; item: IntelNewsItem; signal: IntelSignal }> = [];
+    let order = 0;
+    for (const item of news) {
+      const at = parseTimestamp(item.timestamp || '', order);
+      for (const signal of item.signals || []) {
+        if (signal.kind !== 'movement' && signal.kind !== 'unit') continue;
+        flat.push({ at, order: order++, item, signal });
+      }
+    }
+    flat.sort((a, b) => a.at - b.at || a.order - b.order);
+
+    const ensureUnit = (signal: IntelSignal, item: IntelNewsItem, start: [number, number]) => {
+      const unitSpec = signal.unit || {};
+      const id = typeof unitSpec.id === 'string' ? unitSpec.id.trim() : '';
+      const name = String(unitSpec.name || signal.title || item.title || 'Unknown Unit').trim() || 'Unknown Unit';
+      const keyName = name.toLowerCase();
+
+      let unit: Unit | undefined;
+      if (id && unitsById.has(id)) unit = unitsById.get(id);
+      if (!unit && unitsByName.has(keyName)) unit = unitsByName.get(keyName);
+
+      if (!unit) {
+        let baseId = id || `intel-${slugify(name) || 'unit'}`;
+        let nextId = baseId;
+        let n = 2;
+        while (unitsById.has(nextId) || plannedUnits.some(u => u.id === nextId)) {
+          nextId = `${baseId}-${n++}`;
+        }
+
+        unit = {
+          id: nextId,
+          name,
+          type: asUnitType(unitSpec.type),
+          affiliation: asAffiliation(unitSpec.affiliation),
+          coordinates: start,
+          description: signal.description,
+          pathHistory: [],
+          velocity: undefined,
+        };
+        plannedUnits.push(unit);
+        unitsById.set(unit.id, unit);
+        unitsByName.set(keyName, unit);
+        posById.set(unit.id, start);
+      }
+
+      return unit;
+    };
+
+    for (const entry of flat) {
+      const { item, signal } = entry;
+      const src = buildSourceRef(item);
+
+      const toLoc = signal.movement?.to || signal.location;
+      const to = toLoc?.coordinates || IRAN_COORDINATES;
+      const fromLoc = signal.movement?.from;
+
+      // If LLM didn't provide a unit identity, we can still render a sourced movement arrow (if from/to exist),
+      // but we won't move any unit.
+      if (!signal.unit?.id && !signal.unit?.name && signal.kind === 'movement') {
+        const from = fromLoc?.coordinates;
+        const arrowId = `intel-arrow:${item.id}:${signal.id}`;
+        if (from && (from[0] !== to[0] || from[1] !== to[1])) {
+          arrows.push({
+            id: arrowId,
+            start: from,
+            end: to,
+            color: '#06b6d4',
+            label: signal.title,
+            sources: [src],
+            newsId: item.id,
+            confidence: clamp01(signal.confidence),
+            verified: signal.verified,
+          });
+        }
+        continue;
+      }
+
+      const unit = ensureUnit(signal, item, fromLoc?.coordinates || to);
+      const currentPos = posById.get(unit.id) || unit.coordinates;
+      const from = fromLoc?.coordinates || currentPos;
+
+      const step: MoveStep = {
+        unitId: unit.id,
+        from,
+        to,
+        newsId: item.id,
+        source: src,
+        confidence: clamp01(signal.confidence),
+        verified: signal.verified,
+        label: signal.title,
+        affiliation: unit.affiliation,
+      };
+
+      const list = movesByUnitId.get(unit.id) || [];
+      list.push(step);
+      movesByUnitId.set(unit.id, list);
+      posById.set(unit.id, to);
+
+      const arrowId = `intel-arrow:${item.id}:${signal.id}`;
+      if (from[0] !== to[0] || from[1] !== to[1]) {
+        arrows.push({
+          id: arrowId,
+          start: from,
+          end: to,
+          color: '#06b6d4',
+          label: signal.title,
+          sources: [src],
+          newsId: item.id,
+          confidence: clamp01(signal.confidence),
+          verified: signal.verified,
+        });
+      }
+    }
+
+    if (animate) {
+      // Ensure any new units exist before animating.
+      setUnits(plannedUnits);
+      unitsRef.current = plannedUnits;
+
+      const token = ++moveSeq.current;
+      for (const [unitId, queue] of movesByUnitId.entries()) {
+        // Run each unit's movement sequentially, units in parallel.
+        void (async () => {
+          for (const step of queue) {
+            if (moveSeq.current !== token) return;
+            await animateUnitTo(
+              unitId,
+              step.from,
+              step.to,
+              {
+                newsId: step.newsId,
+                source: step.source,
+                confidence: step.confidence,
+                verified: step.verified,
+              },
+              token
+            );
+          }
+        })();
+      }
+    }
+
+    return { arrows };
+  }
+
+  async function refreshIntel() {
+    const token = ++refreshSeq.current;
+    setLoadingNews(true);
+    setNewsError(null);
+    try {
+      const news = await fetchIntelNews(llmSettings);
+      if (refreshSeq.current !== token) return;
+
+      setIntelNews(news);
+
+      // Derive clickable layers from signals and kick off sourced unit movement.
+      const derived = deriveIntelLayersFromNews(news);
+      setIntelEvents(derived.events);
+      setIntelInfrastructure(derived.infrastructure);
+      setIntelBattleResults(derived.battleResults);
+
+      const { arrows } = applyIntelSignalsToUnitsAndArrows(news, { animate: true });
+      setIntelArrows(arrows);
+
+      // Verify a limited number of locations in the background and update markers accordingly.
+      void (async () => {
+        const flatSignals: Array<{ newsId: string; signalId: string; locPath: 'location' | 'from' | 'to'; location: any; confidence: number }> = [];
+        for (const item of news) {
+          for (const signal of item.signals || []) {
+            flatSignals.push({
+              newsId: item.id,
+              signalId: signal.id,
+              locPath: 'location',
+              location: signal.location,
+              confidence: clamp01(signal.confidence),
+            });
+            if (signal.movement?.from) {
+              flatSignals.push({
+                newsId: item.id,
+                signalId: signal.id,
+                locPath: 'from',
+                location: signal.movement.from,
+                confidence: clamp01(signal.confidence) * 0.8,
+              });
+            }
+            if (signal.movement?.to) {
+              flatSignals.push({
+                newsId: item.id,
+                signalId: signal.id,
+                locPath: 'to',
+                location: signal.movement.to,
+                confidence: clamp01(signal.confidence),
+              });
+            }
+          }
+        }
+
+        flatSignals.sort((a, b) => b.confidence - a.confidence);
+
+        const seen = new Set<string>();
+        const picked = flatSignals.filter(s => {
+          const key = `${String(s.location?.name || '').toLowerCase()}|${String(s.location?.country || '').toLowerCase()}|${(s.location?.coordinates || []).join(',')}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 15);
+
+        const verifiedBySignal = new Map<string, { coordinates: [number, number]; verified: boolean; country?: string }>();
+        for (const entry of picked) {
+          if (refreshSeq.current !== token) return;
+          try {
+            const res = await verifyIntelLocation(entry.location);
+            verifiedBySignal.set(`${entry.newsId}::${entry.signalId}::${entry.locPath}`, {
+              coordinates: res.location.coordinates,
+              verified: res.verified,
+              country: res.location.country,
+            });
+          } catch {
+            // Ignore geocode failures.
+          }
+        }
+
+        if (refreshSeq.current !== token) return;
+
+        const updated = news.map(item => ({
+          ...item,
+          signals: (item.signals || []).map(sig => {
+            const kLoc = `${item.id}::${sig.id}::location`;
+            const kFrom = `${item.id}::${sig.id}::from`;
+            const kTo = `${item.id}::${sig.id}::to`;
+            const vLoc = verifiedBySignal.get(kLoc);
+            const vFrom = verifiedBySignal.get(kFrom);
+            const vTo = verifiedBySignal.get(kTo);
+            if (!vLoc && !vFrom && !vTo) return sig;
+
+            const next = { ...sig } as IntelSignal;
+
+            if (vLoc) {
+              next.location = {
+                ...sig.location,
+                country: sig.location.country || vLoc.country,
+                coordinates: vLoc.coordinates,
+              };
+              next.verified = vLoc.verified;
+            }
+
+            if (sig.movement && (vFrom || vTo)) {
+              next.movement = { ...sig.movement };
+              if (sig.movement.from && vFrom) {
+                next.movement.from = {
+                  ...sig.movement.from,
+                  country: sig.movement.from.country || vFrom.country,
+                  coordinates: vFrom.coordinates,
+                };
+              }
+              if (sig.movement.to && vTo) {
+                next.movement.to = {
+                  ...sig.movement.to,
+                  country: sig.movement.to.country || vTo.country,
+                  coordinates: vTo.coordinates,
+                };
+              }
+              if (typeof next.verified !== 'boolean') {
+                // If we didn't verify the primary location, fall back to movement verification.
+                next.verified = Boolean(vTo?.verified ?? vFrom?.verified);
+              }
+            }
+
+            return next;
+          }),
+        }));
+
+        setIntelNews(updated);
+        const nextDerived = deriveIntelLayersFromNews(updated);
+        setIntelEvents(nextDerived.events);
+        setIntelInfrastructure(nextDerived.infrastructure);
+        setIntelBattleResults(nextDerived.battleResults);
+
+        // Patch arrow endpoints (keep original starts so the direction stays meaningful).
+        const nextEnds = new Map<string, [number, number]>();
+        for (const item of updated) {
+          for (const sig of item.signals || []) {
+            if (sig.kind !== 'movement') continue;
+            const end = sig.movement?.to?.coordinates || sig.location.coordinates;
+            const id = `intel-arrow:${item.id}:${sig.id}`;
+            if (end) nextEnds.set(id, end);
+          }
+        }
+        if (nextEnds.size > 0) {
+          setIntelArrows(prev => prev.map(a => (nextEnds.has(a.id) ? { ...a, end: nextEnds.get(a.id)! } : a)));
+        }
+      })();
+    } catch (e: any) {
+      if (refreshSeq.current !== token) return;
+      const msg = typeof e?.message === 'string' ? e.message : String(e);
+      setNewsError(msg || 'Failed to refresh intel.');
+    } finally {
+      if (refreshSeq.current === token) setLoadingNews(false);
+    }
+  }
+
+  function handleSelectNews(id: string) {
+    setSelectedNewsId(id);
+    const item = intelNews.find(n => n.id === id);
+    const best = item ? pickBestSignal(item.signals || []) : null;
+    const coords = best?.movement?.to?.coordinates || best?.location?.coordinates;
+    if (coords) {
+      setFocus({ coordinates: coords, zoom: 5, key: `news:${id}:${Date.now()}` });
+    }
+  }
+
+  function handleSelectItem(item: Unit | Event | Infrastructure | BattleResult | null) {
+    setSelectedItem(item);
+    const newsId = (item as any)?.newsId;
+    if (typeof newsId === 'string' && newsId) setSelectedNewsId(newsId);
+    const coords = (item as any)?.coordinates;
+    if (Array.isArray(coords) && coords.length === 2) {
+      setFocus({ coordinates: coords as [number, number], zoom: 5, key: `item:${(item as any)?.id || 'x'}:${Date.now()}` });
+    }
+  }
 
   return (
     <div className="flex h-screen w-full bg-slate-50 dark:bg-black text-slate-900 dark:text-slate-200 overflow-hidden font-sans transition-colors duration-300">
@@ -106,13 +663,16 @@ export default function App() {
         <MapDashboard
           filters={filters}
           units={units}
-          events={MOCK_EVENTS}
-          infrastructure={MOCK_INFRASTRUCTURE}
-          battleResults={MOCK_BATTLE_RESULTS}
-          onSelectEvent={setSelectedItem}
-          onSelectUnit={setSelectedItem}
-          onSelectInfrastructure={setSelectedItem}
-          onSelectBattleResult={setSelectedItem}
+          events={allEvents}
+          arrows={allArrows}
+          infrastructure={allInfrastructure}
+          battleResults={allBattleResults}
+          focus={focus}
+          selectedNewsId={selectedNewsId}
+          onSelectEvent={handleSelectItem}
+          onSelectUnit={handleSelectItem}
+          onSelectInfrastructure={handleSelectItem}
+          onSelectBattleResult={handleSelectItem}
         />
         
         <ControlPanel filters={filters} setFilters={setFilters} />
@@ -126,7 +686,13 @@ export default function App() {
       <div className="w-80 h-full py-4 pr-4 pl-2">
         <NewsPanel 
           settings={llmSettings} 
+          news={intelNews}
+          loading={loadingNews}
+          error={newsError}
+          selectedNewsId={selectedNewsId}
           onOpenSettings={() => setShowSettings(true)} 
+          onRefresh={refreshIntel}
+          onSelectNews={handleSelectNews}
         />
       </div>
 

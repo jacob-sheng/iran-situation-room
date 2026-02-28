@@ -16,6 +16,9 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
   const isEvent = 'severity' in selectedItem;
   const isInfra = 'status' in selectedItem;
   const isBattle = 'type' in selectedItem && !('affiliation' in selectedItem);
+  const sources = (selectedItem as any).sources as { name: string; url: string; timestamp: string }[] | undefined;
+  const confidence = (selectedItem as any).confidence as number | undefined;
+  const verified = (selectedItem as any).verified as boolean | undefined;
 
   const getHeaderColor = () => {
     if (isUnit) {
@@ -108,6 +111,49 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
                 {selectedItem.coordinates[1].toFixed(4)}°N, {selectedItem.coordinates[0].toFixed(4)}°E
               </span>
             </div>
+
+            {(typeof confidence === 'number' || typeof verified === 'boolean') && (
+              <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                <span>
+                  {typeof confidence === 'number' ? `Confidence: ${(Math.max(0, Math.min(1, confidence)) * 100).toFixed(0)}%` : ''}
+                </span>
+                {typeof verified === 'boolean' && (
+                  <span className={clsx(
+                    "uppercase tracking-wider",
+                    verified ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                  )}>
+                    {verified ? 'Verified' : 'Unverified'}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {Array.isArray(sources) && sources.length > 0 && (
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                  Sources
+                </div>
+                <div className="space-y-2">
+                  {sources.map((s, idx) => (
+                    <div key={`${s.url}-${idx}`} className="text-xs text-slate-600 dark:text-slate-300">
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-cyan-700 dark:text-cyan-300 underline decoration-cyan-500/40 hover:decoration-cyan-500"
+                      >
+                        {s.name || 'Source'}
+                      </a>
+                      {s.timestamp ? (
+                        <span className="ml-2 font-mono text-[10px] text-slate-500 dark:text-slate-400">
+                          {s.timestamp}
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </motion.div>

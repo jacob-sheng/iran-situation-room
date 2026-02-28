@@ -1,42 +1,29 @@
-import React, { useEffect, useState } from 'react';
-import { NewsItem, LLMSettings } from '../types';
-import { fetchLatestNews } from '../services/llmService';
-import { Activity, ExternalLink, RefreshCw, Settings } from 'lucide-react';
+import React from 'react';
+import { IntelNewsItem, LLMSettings } from '../types';
+import { Activity, ExternalLink, MapPin, RefreshCw, Settings } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface NewsPanelProps {
   settings: LLMSettings;
+  news: IntelNewsItem[];
+  loading: boolean;
+  error: string | null;
+  selectedNewsId: string | null;
   onOpenSettings: () => void;
+  onRefresh: () => void;
+  onSelectNews: (id: string) => void;
 }
 
-export default function NewsPanel({ settings, onOpenSettings }: NewsPanelProps) {
-  const [news, setNews] = useState<NewsItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadNews = async () => {
-    if (!settings.endpoint || !settings.apiKey) {
-      setError('Please configure API settings first.');
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const items = await fetchLatestNews(settings);
-      setNews(items);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load news.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (settings.endpoint && settings.apiKey) {
-      loadNews();
-    }
-  }, [settings]);
-
+export default function NewsPanel({
+  settings,
+  news,
+  loading,
+  error,
+  selectedNewsId,
+  onOpenSettings,
+  onRefresh,
+  onSelectNews,
+}: NewsPanelProps) {
   return (
     <div className="w-80 h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-l border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-colors duration-300">
       <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
@@ -53,8 +40,8 @@ export default function NewsPanel({ settings, onOpenSettings }: NewsPanelProps) 
             <Settings size={16} />
           </button>
           <button
-            onClick={loadNews}
-            disabled={loading}
+            onClick={onRefresh}
+            disabled={loading || !settings.endpoint || !settings.apiKey}
             className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors disabled:opacity-50"
             title="Refresh News"
           >
@@ -64,7 +51,14 @@ export default function NewsPanel({ settings, onOpenSettings }: NewsPanelProps) 
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-        {loading ? (
+        {!settings.endpoint || !settings.apiKey ? (
+          <div className="text-slate-500 text-sm p-4 bg-slate-50 dark:bg-slate-800/30 rounded-lg border border-slate-200 dark:border-slate-700/50 flex flex-col gap-2">
+            <p>Please configure API settings first.</p>
+            <button onClick={onOpenSettings} className="text-cyan-700 dark:text-cyan-300 underline text-left font-medium">
+              Open Settings
+            </button>
+          </div>
+        ) : loading ? (
           <div className="flex flex-col gap-4">
             {[1, 2, 3].map((i) => (
               <div key={i} className="animate-pulse flex flex-col gap-2">
@@ -94,20 +88,31 @@ export default function NewsPanel({ settings, onOpenSettings }: NewsPanelProps) 
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.1 }}
               key={item.id}
-              className="group flex flex-col gap-2 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 hover:border-cyan-500/30 dark:hover:border-cyan-500/30 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+              onClick={() => onSelectNews(item.id)}
+              className={[
+                "group flex flex-col gap-2 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 hover:border-cyan-500/30 dark:hover:border-cyan-500/30 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer",
+                selectedNewsId === item.id ? "ring-2 ring-cyan-500/40 border-cyan-500/40" : "",
+              ].join(' ')}
             >
               <div className="flex justify-between items-start gap-2">
                 <h3 className="text-sm font-medium text-slate-800 dark:text-slate-200 leading-tight">
                   {item.title}
                 </h3>
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-slate-400 dark:text-slate-500 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors mt-0.5"
-                >
-                  <ExternalLink size={14} />
-                </a>
+                <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 text-[10px] font-mono text-slate-500">
+                    <MapPin size={12} />
+                    <span>{Array.isArray(item.signals) ? item.signals.length : 0}</span>
+                  </div>
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-slate-400 dark:text-slate-500 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors mt-0.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <ExternalLink size={14} />
+                  </a>
+                </div>
               </div>
               <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                 {item.summary}

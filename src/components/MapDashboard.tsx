@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ComposableMap,
   Geographies,
@@ -9,7 +9,7 @@ import {
   ZoomableGroup
 } from 'react-simple-maps';
 import { Unit, Event, Arrow, Annotation, MapFilters, Infrastructure, BattleResult } from '../types';
-import { MOCK_ARROWS, MOCK_ANNOTATIONS, IRAN_COORDINATES } from '../constants';
+import { MOCK_ANNOTATIONS, IRAN_COORDINATES } from '../constants';
 import { MapPin, Shield, Plane, Anchor, AlertTriangle, Factory, Zap, Building, Crosshair, Skull, Flame } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -19,8 +19,11 @@ interface MapDashboardProps {
   filters: MapFilters;
   units: Unit[];
   events: Event[];
+  arrows: Arrow[];
   infrastructure: Infrastructure[];
   battleResults: BattleResult[];
+  focus?: { coordinates: [number, number]; zoom?: number; key: string } | null;
+  selectedNewsId?: string | null;
   onSelectEvent: (event: Event | null) => void;
   onSelectUnit: (unit: Unit | null) => void;
   onSelectInfrastructure: (infra: Infrastructure | null) => void;
@@ -31,14 +34,26 @@ export default function MapDashboard({
   filters, 
   units, 
   events, 
+  arrows,
   infrastructure, 
   battleResults, 
+  focus,
+  selectedNewsId,
   onSelectEvent, 
   onSelectUnit,
   onSelectInfrastructure,
   onSelectBattleResult
 }: MapDashboardProps) {
   const [position, setPosition] = useState({ coordinates: IRAN_COORDINATES, zoom: 4 });
+
+  useEffect(() => {
+    if (!focus) return;
+    setPosition((pos) => ({
+      ...pos,
+      coordinates: focus.coordinates,
+      zoom: focus.zoom ?? pos.zoom,
+    }));
+  }, [focus?.key]);
 
   function handleZoomIn() {
     if (position.zoom >= 10) return;
@@ -104,6 +119,7 @@ export default function MapDashboard({
             {({ geographies }) =>
               geographies.map((geo) => {
                 const isIran = geo.properties.name === 'Iran';
+                const isTaiwan = geo.properties.name === 'Taiwan';
                 return (
                   <Geography
                     key={geo.rsmKey}
@@ -112,16 +128,21 @@ export default function MapDashboard({
                     style={{
                       default: { 
                         fill: isIran ? 'rgba(6, 182, 212, 0.15)' : 'var(--color-slate-200, #e2e8f0)',
-                        stroke: isIran ? '#06b6d4' : 'var(--color-slate-300, #cbd5e1)',
-                        strokeWidth: isIran ? 1 : 0.5,
+                        // Merge Taiwan visually into China: keep fill, drop stroke & hover interactions.
+                        stroke: isTaiwan ? 'transparent' : (isIran ? '#06b6d4' : 'var(--color-slate-300, #cbd5e1)'),
+                        strokeWidth: isTaiwan ? 0 : (isIran ? 1 : 0.5),
+                        pointerEvents: isTaiwan ? 'none' : 'auto',
                         outline: 'none'
                       },
                       hover: { 
-                        fill: isIran ? 'rgba(6, 182, 212, 0.25)' : 'var(--color-slate-300, #cbd5e1)',
-                        stroke: isIran ? '#06b6d4' : 'var(--color-slate-400, #94a3b8)',
+                        fill: isTaiwan
+                          ? 'var(--color-slate-200, #e2e8f0)'
+                          : (isIran ? 'rgba(6, 182, 212, 0.25)' : 'var(--color-slate-300, #cbd5e1)'),
+                        stroke: isTaiwan ? 'transparent' : (isIran ? '#06b6d4' : 'var(--color-slate-400, #94a3b8)'),
+                        pointerEvents: isTaiwan ? 'none' : 'auto',
                         outline: 'none' 
                       },
-                      pressed: { outline: 'none' }
+                      pressed: { outline: 'none', pointerEvents: isTaiwan ? 'none' : 'auto' }
                     }}
                   />
                 );
@@ -139,18 +160,21 @@ export default function MapDashboard({
           </defs>
 
           {/* Arrows */}
-          {filters.showArrows && MOCK_ARROWS.map((arrow) => (
+          {filters.showArrows && arrows.map((arrow) => {
+            const isSelected = selectedNewsId && arrow.newsId === selectedNewsId;
+            return (
             <Line
               key={arrow.id}
               from={arrow.start}
               to={arrow.end}
               stroke={arrow.color}
-              strokeWidth={2 * markerScale}
+              strokeWidth={(isSelected ? 3 : 2) * markerScale}
               strokeLinecap="round"
-              className="opacity-70"
+              className={clsx(isSelected ? "opacity-95" : "opacity-70")}
               markerEnd={arrow.color === '#06b6d4' ? 'url(#arrow-cyan)' : 'url(#arrow-amber)'}
             />
-          ))}
+            );
+          })}
 
           {/* Annotations */}
           {filters.showAnnotations && MOCK_ANNOTATIONS.map((ann) => (
@@ -176,6 +200,9 @@ export default function MapDashboard({
             <Marker key={infra.id} coordinates={infra.coordinates} onClick={() => onSelectInfrastructure(infra)}>
               <g transform={`scale(${markerScale})`}>
                 <g className="cursor-pointer transition-transform hover:scale-125" transform="translate(-12, -12)">
+                  {selectedNewsId && infra.newsId === selectedNewsId && (
+                    <circle cx="12" cy="12" r="16" fill="none" stroke="#06b6d4" strokeWidth="2" />
+                  )}
                   <circle cx="12" cy="12" r="12" className="fill-white dark:fill-slate-900" stroke={
                     infra.status === 'destroyed' ? '#ef4444' :
                     infra.status === 'damaged' ? '#f59e0b' :
@@ -204,6 +231,9 @@ export default function MapDashboard({
             <Marker key={result.id} coordinates={result.coordinates} onClick={() => onSelectBattleResult(result)}>
               <g transform={`scale(${markerScale})`}>
                 <g className="cursor-pointer transition-transform hover:scale-125" transform="translate(-12, -12)">
+                  {selectedNewsId && result.newsId === selectedNewsId && (
+                    <circle cx="12" cy="12" r="18" fill="none" stroke="#06b6d4" strokeWidth="2" />
+                  )}
                   <circle cx="12" cy="12" r="14" fill="rgba(239, 68, 68, 0.15)" className="animate-ping" />
                   <circle cx="12" cy="12" r="12" className="fill-rose-500 dark:fill-rose-900" stroke="#ef4444" strokeWidth="1.5" />
                   <foreignObject x="4" y="4" width="16" height="16">
@@ -224,6 +254,9 @@ export default function MapDashboard({
                   className="cursor-pointer transition-transform hover:scale-125"
                   transform="translate(-12, -24)"
                 >
+                  {selectedNewsId && event.newsId === selectedNewsId && (
+                    <circle cx="12" cy="12" r="18" fill="none" stroke="#06b6d4" strokeWidth="2" />
+                  )}
                   <circle cx="12" cy="12" r="14" fill={
                     event.severity === 'high' ? 'rgba(239, 68, 68, 0.2)' :
                     event.severity === 'medium' ? 'rgba(245, 158, 11, 0.2)' :
@@ -280,6 +313,9 @@ export default function MapDashboard({
             <Marker key={unit.id} coordinates={unit.coordinates} onClick={() => onSelectUnit(unit)}>
               <g transform={`scale(${markerScale})`}>
                 <g className="cursor-pointer transition-transform hover:scale-125" transform="translate(-12, -12)">
+                  {selectedNewsId && unit.newsId === selectedNewsId && (
+                    <circle cx="12" cy="12" r="16" fill="none" stroke="#06b6d4" strokeWidth="2" />
+                  )}
                   <circle cx="12" cy="12" r="12" className="fill-white dark:fill-slate-900" stroke={
                     unit.affiliation === 'iran' ? '#34d399' :
                     unit.affiliation === 'us' ? '#60a5fa' :
