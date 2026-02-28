@@ -45,6 +45,7 @@
 
 1. Install dependencies:
    `npm install`
+   - CI/Zeabur 等严格依赖解析环境建议使用：`npm ci --legacy-peer-deps`
 2. Run the app:
    `npm run dev`
 
@@ -69,7 +70,7 @@
 1. 在 Zeabur 创建 Project，并连接 GitHub 仓库 `jacob-sheng/iran-situation-room`
 2. 选择 Node.js（或通用）服务类型
 3. Build Command：
-   `npm ci && npm run build`
+   `npm ci --legacy-peer-deps && npm run build`
 4. Start Command：
    `npm run preview -- --host 0.0.0.0 --port $PORT`
 5. 部署完成后，在站点 UI 的 Settings 中填写 LLM 的 `endpoint/apiKey/model`
