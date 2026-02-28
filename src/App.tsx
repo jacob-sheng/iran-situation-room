@@ -255,6 +255,8 @@ export default function App() {
     } else {
       document.documentElement.classList.remove('dark');
     }
+    const icon = document.getElementById('favicon') as HTMLLinkElement | null;
+    if (icon) icon.href = isDarkMode ? '/favicon-dark.svg' : '/favicon-light.svg';
   }, [isDarkMode]);
 
   // Follow system theme changes until the user explicitly overrides it.
