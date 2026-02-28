@@ -3,6 +3,7 @@ import { IntelNewsItem, LLMSettings } from '../types';
 import { Activity, ExternalLink, MapPin, RefreshCw, Settings } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useI18n } from '../i18n';
+import clsx from 'clsx';
 
 interface NewsPanelProps {
   settings: LLMSettings;
@@ -14,6 +15,7 @@ interface NewsPanelProps {
   onOpenSettings: () => void;
   onRefresh: () => void;
   onSelectNews: (id: string) => void;
+  className?: string;
 }
 
 export default function NewsPanel({
@@ -26,10 +28,16 @@ export default function NewsPanel({
   onOpenSettings,
   onRefresh,
   onSelectNews,
+  className,
 }: NewsPanelProps) {
   const { t } = useI18n();
   return (
-    <div className="w-80 h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-l border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-colors duration-300">
+    <div
+      className={clsx(
+        "bg-white/90 dark:bg-slate-900/90 backdrop-blur-md flex flex-col shadow-2xl transition-colors duration-300",
+        className ?? "w-80 h-full border-l border-slate-200 dark:border-slate-800"
+      )}
+    >
       <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2">
           <Activity size={18} className="text-cyan-600 dark:text-cyan-400" />

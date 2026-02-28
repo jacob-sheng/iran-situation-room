@@ -8,11 +8,12 @@ import { Arrow, BattleResult, Event, Infrastructure, IntelNewsItem, IntelSignal,
 import { IRAN_COORDINATES, MOCK_ARROWS, MOCK_BATTLE_RESULTS, MOCK_EVENTS, MOCK_INFRASTRUCTURE, MOCK_UNITS } from './constants';
 import { fetchIntelNews } from './services/llmService';
 import { verifyIntelLocation } from './services/geocodeService';
-import { Moon, Sun } from 'lucide-react';
+import { Moon, RefreshCw, Sun, X } from 'lucide-react';
 import { useI18n } from './i18n';
 
 type MapFocus = { coordinates: [number, number]; zoom?: number; key: string } | null;
 type ThemeSource = 'system' | 'user';
+type MobileSheet = 'none' | 'news' | 'layers' | 'details';
 
 const DEFAULT_LLM_SETTINGS: LLMSettings = {
   endpoint: 'https://warapi1.zeabur.app/v1',
@@ -142,8 +143,14 @@ export default function App() {
 
   const refreshSeq = useRef(0);
   const moveSeq = useRef(0);
+  const autoRefreshDone = useRef(false);
 
   const [selectedItem, setSelectedItem] = useState<Unit | Event | Infrastructure | BattleResult | null>(null);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    return window.matchMedia('(max-width: 1023px)').matches;
+  });
+  const [mobileSheet, setMobileSheet] = useState<MobileSheet>('none');
 
   // Handle dark mode class on root
   useEffect(() => {
@@ -199,6 +206,44 @@ export default function App() {
       }
     }
   }, []);
+
+  // Auto refresh once on first load when settings are available.
+  useEffect(() => {
+    if (autoRefreshDone.current) return;
+    if (!llmSettings.endpoint || !llmSettings.apiKey) return;
+    autoRefreshDone.current = true;
+    void refreshIntel();
+  }, [llmSettings.endpoint, llmSettings.apiKey, llmSettings.model]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia('(max-width: 1023px)');
+    const onChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      const next = 'matches' in e ? e.matches : mql.matches;
+      setIsMobile(Boolean(next));
+    };
+    onChange(mql);
+
+    try {
+      (mql as any).addEventListener?.('change', onChange);
+      (mql as any).addListener?.(onChange);
+    } catch {
+      // Ignore.
+    }
+
+    return () => {
+      try {
+        (mql as any).removeEventListener?.('change', onChange);
+        (mql as any).removeListener?.(onChange);
+      } catch {
+        // Ignore.
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setMobileSheet('none');
+  }, [isMobile]);
 
   const handleSaveSettings = (newSettings: LLMSettings) => {
     setLlmSettings(newSettings);
@@ -735,6 +780,7 @@ export default function App() {
     if (coords) {
       setFocus({ coordinates: coords, zoom: 5, key: `news:${id}:${Date.now()}` });
     }
+    if (isMobile) setMobileSheet('none');
   }
 
   function handleSelectItem(item: Unit | Event | Infrastructure | BattleResult | null) {
@@ -745,13 +791,21 @@ export default function App() {
     if (Array.isArray(coords) && coords.length === 2) {
       setFocus({ coordinates: coords as [number, number], zoom: 5, key: `item:${(item as any)?.id || 'x'}:${Date.now()}` });
     }
+    if (isMobile && item) setMobileSheet('details');
   }
 
+  const mobileSheetTitle =
+    mobileSheet === 'news'
+      ? t('mobile.news')
+      : mobileSheet === 'layers'
+        ? t('mobile.layers')
+        : t('mobile.details');
+
   return (
-    <div className="flex h-screen w-full bg-slate-50 dark:bg-black text-slate-900 dark:text-slate-200 overflow-hidden font-sans transition-colors duration-300">
+    <div className="relative flex h-screen h-dvh w-full bg-slate-50 dark:bg-black text-slate-900 dark:text-slate-200 overflow-hidden font-sans transition-colors duration-300">
       {/* Main Map Area */}
-      <div className="flex-1 relative p-4 pl-4 pr-2 pb-4 pt-4">
-        <div className="absolute top-6 right-6 z-10 flex items-center gap-2">
+      <div className="flex-1 relative p-2 sm:p-4 sm:pl-4 sm:pr-2 sm:pb-4 sm:pt-4">
+        <div className="absolute top-3 right-3 sm:top-6 sm:right-6 z-10 flex items-center gap-2">
           <div
             className="flex items-center bg-white/90 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-full shadow-lg overflow-hidden"
             title={t('app.toggleLanguage')}
@@ -759,7 +813,7 @@ export default function App() {
             <button
               onClick={() => setLocale('zh')}
               className={[
-                "px-3 py-2 text-xs font-mono transition-colors",
+                "px-2.5 py-2 sm:px-3 text-xs font-mono transition-colors",
                 locale === 'zh'
                   ? "bg-cyan-600 text-white"
                   : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60",
@@ -770,7 +824,7 @@ export default function App() {
             <button
               onClick={() => setLocale('en')}
               className={[
-                "px-3 py-2 text-xs font-mono transition-colors",
+                "px-2.5 py-2 sm:px-3 text-xs font-mono transition-colors",
                 locale === 'en'
                   ? "bg-cyan-600 text-white"
                   : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60",
@@ -796,6 +850,17 @@ export default function App() {
           >
             {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
           </button>
+
+          {isMobile && (
+            <button
+              onClick={refreshIntel}
+              disabled={loadingNews || !llmSettings.endpoint || !llmSettings.apiKey}
+              className="p-2.5 bg-white/90 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-full shadow-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors disabled:opacity-50"
+              title={t('news.refreshNews')}
+            >
+              <RefreshCw size={18} className={loadingNews ? 'animate-spin' : ''} />
+            </button>
+          )}
         </div>
 
         <MapDashboard
@@ -812,16 +877,16 @@ export default function App() {
           onSelectInfrastructure={handleSelectItem}
           onSelectBattleResult={handleSelectItem}
         />
-        
-        <ControlPanel filters={filters} setFilters={setFilters} />
-        
-        {selectedItem && (
+
+        {!isMobile && <ControlPanel filters={filters} setFilters={setFilters} />}
+
+        {!isMobile && selectedItem && (
           <DetailsPanel selectedItem={selectedItem} onClose={() => setSelectedItem(null)} />
         )}
       </div>
 
-      {/* Right Sidebar for News */}
-      <div className="w-80 h-full py-4 pr-4 pl-2">
+      {!isMobile && (
+      <div className="hidden lg:block w-80 h-full py-4 pr-4 pl-2">
         <NewsPanel 
           settings={llmSettings} 
           news={intelNews}
@@ -832,8 +897,107 @@ export default function App() {
           onOpenSettings={() => setShowSettings(true)} 
           onRefresh={refreshIntel}
           onSelectNews={handleSelectNews}
+          className="w-full h-full border-l border-slate-200 dark:border-slate-800"
         />
       </div>
+      )}
+
+      {isMobile && (
+        <>
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+            <div className="pointer-events-auto rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md shadow-2xl p-1.5 grid grid-cols-3 gap-1">
+              <button
+                onClick={() => setMobileSheet(prev => prev === 'news' ? 'none' : 'news')}
+                className={[
+                  "px-2 py-2 text-xs rounded-xl font-medium transition-colors",
+                  mobileSheet === 'news'
+                    ? "bg-cyan-600 text-white"
+                    : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800",
+                ].join(' ')}
+              >
+                {t('mobile.news')}
+              </button>
+              <button
+                onClick={() => setMobileSheet(prev => prev === 'layers' ? 'none' : 'layers')}
+                className={[
+                  "px-2 py-2 text-xs rounded-xl font-medium transition-colors",
+                  mobileSheet === 'layers'
+                    ? "bg-cyan-600 text-white"
+                    : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800",
+                ].join(' ')}
+              >
+                {t('mobile.layers')}
+              </button>
+              <button
+                onClick={() => {
+                  if (!selectedItem) return;
+                  setMobileSheet(prev => prev === 'details' ? 'none' : 'details');
+                }}
+                disabled={!selectedItem}
+                className={[
+                  "px-2 py-2 text-xs rounded-xl font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+                  mobileSheet === 'details'
+                    ? "bg-cyan-600 text-white"
+                    : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800",
+                ].join(' ')}
+              >
+                {t('mobile.details')}
+              </button>
+            </div>
+          </div>
+
+          {mobileSheet !== 'none' && (
+            <div className="absolute inset-0 z-30">
+              <button
+                className="absolute inset-0 bg-black/35"
+                aria-label={t('mobile.close')}
+                onClick={() => setMobileSheet('none')}
+              />
+              <div className="absolute bottom-0 left-0 right-0 max-h-[78dvh] rounded-t-2xl border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+                  <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{mobileSheetTitle}</div>
+                  <button
+                    className="p-1.5 rounded-md text-slate-500 hover:text-slate-800 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    onClick={() => setMobileSheet('none')}
+                    title={t('mobile.close')}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="h-[min(70dvh,560px)] overflow-y-auto p-3">
+                  {mobileSheet === 'news' && (
+                    <NewsPanel
+                      settings={llmSettings}
+                      news={intelNews}
+                      latestBatchSize={latestBatchSize}
+                      loading={loadingNews}
+                      error={newsError}
+                      selectedNewsId={selectedNewsId}
+                      onOpenSettings={() => setShowSettings(true)}
+                      onRefresh={refreshIntel}
+                      onSelectNews={handleSelectNews}
+                      className="w-full h-full rounded-xl border border-slate-200 dark:border-slate-800"
+                    />
+                  )}
+
+                  {mobileSheet === 'layers' && (
+                    <ControlPanel filters={filters} setFilters={setFilters} embedded />
+                  )}
+
+                  {mobileSheet === 'details' && selectedItem && (
+                    <DetailsPanel
+                      selectedItem={selectedItem}
+                      onClose={() => setMobileSheet('none')}
+                      embedded
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       {showSettings && (
         <SettingsModal 

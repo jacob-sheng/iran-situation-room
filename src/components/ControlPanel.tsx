@@ -7,9 +7,10 @@ import { useI18n } from '../i18n';
 interface ControlPanelProps {
   filters: MapFilters;
   setFilters: React.Dispatch<React.SetStateAction<MapFilters>>;
+  embedded?: boolean;
 }
 
-export default function ControlPanel({ filters, setFilters }: ControlPanelProps) {
+export default function ControlPanel({ filters, setFilters, embedded = false }: ControlPanelProps) {
   const { t } = useI18n();
   const toggleFilter = (key: keyof MapFilters) => {
     setFilters((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -25,7 +26,12 @@ export default function ControlPanel({ filters, setFilters }: ControlPanelProps)
   ];
 
   return (
-    <div className="absolute top-4 left-4 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl p-4 w-64 transition-colors duration-300">
+    <div
+      className={clsx(
+        "bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl p-4 transition-colors duration-300",
+        embedded ? "w-full" : "absolute top-4 left-4 w-64"
+      )}
+    >
       <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-200 dark:border-slate-800">
         <Layers size={18} className="text-cyan-600 dark:text-cyan-400" />
         <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">{t('layers.title')}</h2>

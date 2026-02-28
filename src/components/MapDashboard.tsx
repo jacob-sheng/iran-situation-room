@@ -344,13 +344,13 @@ export default function MapDashboard({
       <div className="absolute bottom-4 right-4 flex flex-col gap-2">
         <button
           onClick={handleZoomIn}
-          className="w-8 h-8 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white backdrop-blur-sm transition-colors"
+          className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white backdrop-blur-sm transition-colors"
         >
           +
         </button>
         <button
           onClick={handleZoomOut}
-          className="w-8 h-8 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white backdrop-blur-sm transition-colors"
+          className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white backdrop-blur-sm transition-colors"
         >
           -
         </button>

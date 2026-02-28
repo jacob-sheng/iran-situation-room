@@ -5,6 +5,10 @@ export const MESSAGES = {
     'app.toggleLanguage': 'Toggle language',
     'app.lang.zh': '中文',
     'app.lang.en': 'EN',
+    'mobile.news': 'News',
+    'mobile.layers': 'Layers',
+    'mobile.details': 'Details',
+    'mobile.close': 'Close',
 
     'news.title': 'Live Intel',
     'news.apiSettings': 'API settings',
@@ -77,6 +81,10 @@ export const MESSAGES = {
     'app.toggleLanguage': '切换语言',
     'app.lang.zh': '中文',
     'app.lang.en': 'EN',
+    'mobile.news': '新闻',
+    'mobile.layers': '图层',
+    'mobile.details': '详情',
+    'mobile.close': '关闭',
 
     'news.title': '实时情报',
     'news.apiSettings': 'API 设置',

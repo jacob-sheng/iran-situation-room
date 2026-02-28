@@ -8,9 +8,10 @@ import { useI18n } from '../i18n';
 interface DetailsPanelProps {
   selectedItem: Unit | Event | Infrastructure | BattleResult | null;
   onClose: () => void;
+  embedded?: boolean;
 }
 
-export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProps) {
+export default function DetailsPanel({ selectedItem, onClose, embedded = false }: DetailsPanelProps) {
   if (!selectedItem) return null;
   const { t } = useI18n();
 
@@ -75,6 +76,111 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
     return '';
   };
 
+  const body = (
+    <>
+      <div className={clsx("h-1 w-full", getHeaderColor())} />
+      <div className="p-4">
+        <div className="flex justify-between items-start mb-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800">
+              {getIcon()}
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 leading-tight">
+                {getTitle()}
+              </h3>
+              <p className="text-xs font-mono text-slate-500 uppercase tracking-wider mt-1">
+                {getSubtitle()}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors p-1"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-start gap-3 text-sm text-slate-600 dark:text-slate-300">
+            <Info size={16} className="text-slate-400 dark:text-slate-500 mt-0.5 shrink-0" />
+            <p className="leading-relaxed">
+              {('description' in selectedItem && selectedItem.description) ? selectedItem.description : t('details.noDescription')}
+            </p>
+          </div>
+
+          {('date' in selectedItem) && (
+            <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
+              <Calendar size={16} className="text-slate-400 dark:text-slate-500 shrink-0" />
+              <span className="font-mono">{(selectedItem as any).date}</span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
+            <MapPin size={16} className="text-slate-400 dark:text-slate-500 shrink-0" />
+            <span className="font-mono">
+              {selectedItem.coordinates[1].toFixed(4)}°N, {selectedItem.coordinates[0].toFixed(4)}°E
+            </span>
+          </div>
+
+          {(typeof confidence === 'number' || typeof verified === 'boolean') && (
+            <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
+              <span>
+                {typeof confidence === 'number'
+                  ? `${t('details.confidence')}: ${(Math.max(0, Math.min(1, confidence)) * 100).toFixed(0)}%`
+                  : ''}
+              </span>
+              {typeof verified === 'boolean' && (
+                <span className={clsx(
+                  "uppercase tracking-wider",
+                  verified ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                )}>
+                  {verified ? t('details.verified') : t('details.unverified')}
+                </span>
+              )}
+            </div>
+          )}
+
+          {Array.isArray(sources) && sources.length > 0 && (
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                {t('details.sources')}
+              </div>
+              <div className="space-y-2">
+                {sources.map((s, idx) => (
+                  <div key={`${s.url}-${idx}`} className="text-xs text-slate-600 dark:text-slate-300">
+                    <a
+                      href={s.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-700 dark:text-cyan-300 underline decoration-cyan-500/40 hover:decoration-cyan-500"
+                    >
+                      {s.name || t('details.sourceFallback')}
+                    </a>
+                    {s.timestamp ? (
+                      <span className="ml-2 font-mono text-[10px] text-slate-500 dark:text-slate-400">
+                        {s.timestamp}
+                      </span>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="w-full bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden transition-colors duration-300">
+        {body}
+      </div>
+    );
+  }
+
   return (
     <AnimatePresence>
       <motion.div
@@ -83,99 +189,7 @@ export default function DetailsPanel({ selectedItem, onClose }: DetailsPanelProp
         exit={{ opacity: 0, x: -20 }}
         className="absolute bottom-4 left-4 w-80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden transition-colors duration-300"
       >
-        <div className={clsx("h-1 w-full", getHeaderColor())} />
-        
-        <div className="p-4">
-          <div className="flex justify-between items-start mb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800">
-                {getIcon()}
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 leading-tight">
-                  {getTitle()}
-                </h3>
-                <p className="text-xs font-mono text-slate-500 uppercase tracking-wider mt-1">
-                  {getSubtitle()}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={onClose}
-              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors p-1"
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-start gap-3 text-sm text-slate-600 dark:text-slate-300">
-              <Info size={16} className="text-slate-400 dark:text-slate-500 mt-0.5 shrink-0" />
-              <p className="leading-relaxed">
-                {('description' in selectedItem && selectedItem.description) ? selectedItem.description : t('details.noDescription')}
-              </p>
-            </div>
-
-            {('date' in selectedItem) && (
-              <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
-                <Calendar size={16} className="text-slate-400 dark:text-slate-500 shrink-0" />
-                <span className="font-mono">{(selectedItem as any).date}</span>
-              </div>
-            )}
-
-            <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
-              <MapPin size={16} className="text-slate-400 dark:text-slate-500 shrink-0" />
-              <span className="font-mono">
-                {selectedItem.coordinates[1].toFixed(4)}°N, {selectedItem.coordinates[0].toFixed(4)}°E
-              </span>
-            </div>
-
-            {(typeof confidence === 'number' || typeof verified === 'boolean') && (
-              <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                <span>
-                  {typeof confidence === 'number'
-                    ? `${t('details.confidence')}: ${(Math.max(0, Math.min(1, confidence)) * 100).toFixed(0)}%`
-                    : ''}
-                </span>
-                {typeof verified === 'boolean' && (
-                  <span className={clsx(
-                    "uppercase tracking-wider",
-                    verified ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
-                  )}>
-                    {verified ? t('details.verified') : t('details.unverified')}
-                  </span>
-                )}
-              </div>
-            )}
-
-            {Array.isArray(sources) && sources.length > 0 && (
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
-                <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
-                  {t('details.sources')}
-                </div>
-                <div className="space-y-2">
-                  {sources.map((s, idx) => (
-                    <div key={`${s.url}-${idx}`} className="text-xs text-slate-600 dark:text-slate-300">
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-cyan-700 dark:text-cyan-300 underline decoration-cyan-500/40 hover:decoration-cyan-500"
-                      >
-                        {s.name || t('details.sourceFallback')}
-                      </a>
-                      {s.timestamp ? (
-                        <span className="ml-2 font-mono text-[10px] text-slate-500 dark:text-slate-400">
-                          {s.timestamp}
-                        </span>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        {body}
       </motion.div>
     </AnimatePresence>
   );

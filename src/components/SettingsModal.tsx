@@ -121,7 +121,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden">
+      <div className="w-full max-w-md max-h-[92dvh] mx-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
           <div className="flex items-center gap-2 text-slate-800 dark:text-slate-200">
             <Settings size={18} />
@@ -132,7 +132,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
           </button>
         </div>
         
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form onSubmit={handleSubmit} className="p-4 space-y-4 overflow-y-auto max-h-[calc(92dvh-72px)]">
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
               {t('settings.endpointLabel')}
