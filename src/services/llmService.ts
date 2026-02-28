@@ -2,6 +2,22 @@ import { IntelNewsItem, IntelSignal, LLMSettings, NewsItem } from '../types';
 
 const FALLBACK_IRAN_COORDINATES: [number, number] = [53.6880, 32.4279];
 
+// Stable hash for IDs derived from URLs (keeps selection stable across refreshes).
+function fnv1a32(input: string) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function stableNewsIdFromUrl(url: string) {
+  const u = String(url || '').trim();
+  if (!u) return '';
+  return `news:${fnv1a32(u).toString(36)}`;
+}
+
 function stripHtml(input: string) {
   return input
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, ' ')
@@ -100,7 +116,7 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
   const system = [
     'You are a military intelligence analyst.',
     'You will be given up to 10 RSS articles about the Middle East / Iran situation.',
-    'Pick the 5 most important items and return ONLY a valid JSON array (no markdown).',
+    'Pick the 10 most important items and return ONLY a valid JSON array (no markdown).',
     '',
     'Each news item MUST be an object with keys:',
     '- id (string)',
@@ -187,13 +203,15 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
     const source = String(raw.source || 'BBC').trim() || 'BBC';
     let url = String(raw.url || '').trim();
     const timestamp = String(raw.timestamp || '').trim();
-    const id = String(raw.id || `news-${i}`).trim() || `news-${i}`;
+    const fallbackId = String(raw.id || `news-${i}`).trim() || `news-${i}`;
 
     if (url && !allowedUrls.has(url)) {
       const picked = pickBestUrlFromRss(title, rssArticles);
       if (picked) url = picked;
     }
     if (!url && rssArticles[i]?.link) url = rssArticles[i].link;
+
+    const stableId = stableNewsIdFromUrl(url) || fallbackId;
 
     const snippet = snippetByUrl.get(url) || '';
     const rawSignals = Array.isArray(raw.signals) ? raw.signals : [];
@@ -210,7 +228,7 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
       const confidence = clamp01(Number(s.confidence));
 
       const signal: IntelSignal = {
-        id: String(s.id || `sig-${id}-${j}`).trim() || `sig-${id}-${j}`,
+        id: String(s.id || `sig-${stableId}-${j}`).trim() || `sig-${stableId}-${j}`,
         kind,
         title: String(s.title || title || 'Signal').trim() || 'Signal',
         description: String(s.description || '').trim() || summary || '',
@@ -237,7 +255,7 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
 
     if (signals.length === 0) {
       signals.push({
-        id: `sig-${id}-0`,
+        id: `sig-${stableId}-0`,
         kind: 'event',
         title: title || 'Intel Update',
         description: summary || '',
@@ -252,7 +270,7 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
     }
 
     out.push({
-      id,
+      id: stableId,
       title,
       summary,
       source,
@@ -262,7 +280,7 @@ export async function fetchIntelNews(settings: LLMSettings): Promise<IntelNewsIt
     });
   }
 
-  return out.slice(0, 5);
+  return out.slice(0, 10);
 }
 
 export async function fetchLatestNews(settings: LLMSettings): Promise<NewsItem[]> {

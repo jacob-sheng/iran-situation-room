@@ -105,6 +105,7 @@ export default function App() {
   const [newsError, setNewsError] = useState<string | null>(null);
   const [selectedNewsId, setSelectedNewsId] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapFocus>(null);
+  const [latestBatchSize, setLatestBatchSize] = useState(0);
 
   const [intelEvents, setIntelEvents] = useState<Event[]>([]);
   const [intelInfrastructure, setIntelInfrastructure] = useState<Infrastructure[]>([]);
@@ -469,24 +470,45 @@ export default function App() {
     setLoadingNews(true);
     setNewsError(null);
     try {
-      const news = await fetchIntelNews(llmSettings);
+      const MAX_NEWS_ITEMS = 0; // 0 means unlimited retention.
+      const freshAll = await fetchIntelNews(llmSettings);
       if (refreshSeq.current !== token) return;
 
-      setIntelNews(news);
+      // Dedupe within the freshly fetched batch by URL (keep first occurrence).
+      const seenUrls = new Set<string>();
+      const fresh = freshAll.filter(item => {
+        const url = String(item?.url || '').trim();
+        if (!url) return false;
+        if (seenUrls.has(url)) return false;
+        seenUrls.add(url);
+        return true;
+      });
+
+      // Merge by URL (refresh overwrites existing). New items appear at the top.
+      const freshUrls = new Set(fresh.map(n => n.url));
+      const older = intelNews.filter(n => !freshUrls.has(n.url));
+      let merged = [...fresh, ...older];
+      if (MAX_NEWS_ITEMS > 0 && merged.length > MAX_NEWS_ITEMS) merged = merged.slice(0, MAX_NEWS_ITEMS);
+
+      setIntelNews(merged);
+      setLatestBatchSize(fresh.length);
 
       // Derive clickable layers from signals and kick off sourced unit movement.
-      const derived = deriveIntelLayersFromNews(news);
+      const derived = deriveIntelLayersFromNews(merged);
       setIntelEvents(derived.events);
       setIntelInfrastructure(derived.infrastructure);
       setIntelBattleResults(derived.battleResults);
 
-      const { arrows } = applyIntelSignalsToUnitsAndArrows(news, { animate: true });
-      setIntelArrows(arrows);
+      // Only animate unit movement based on the current refresh batch (avoid replaying old moves).
+      const { arrows: batchArrows } = applyIntelSignalsToUnitsAndArrows(fresh, { animate: true });
+      const refreshedNewsIds = new Set(fresh.map(n => n.id));
+      setIntelArrows(prev => [...batchArrows, ...prev.filter(a => !refreshedNewsIds.has(a.newsId || ''))]);
 
       // Verify a limited number of locations in the background and update markers accordingly.
       void (async () => {
+        if (fresh.length === 0) return;
         const flatSignals: Array<{ newsId: string; signalId: string; locPath: 'location' | 'from' | 'to'; location: any; confidence: number }> = [];
-        for (const item of news) {
+        for (const item of fresh) {
           for (const signal of item.signals || []) {
             flatSignals.push({
               newsId: item.id,
@@ -543,7 +565,7 @@ export default function App() {
 
         if (refreshSeq.current !== token) return;
 
-        const updated = news.map(item => ({
+        const freshVerified = fresh.map(item => ({
           ...item,
           signals: (item.signals || []).map(sig => {
             const kLoc = `${item.id}::${sig.id}::location`;
@@ -591,17 +613,20 @@ export default function App() {
           }),
         }));
 
-        setIntelNews(updated);
-        const nextDerived = deriveIntelLayersFromNews(updated);
+        let nextMerged = [...freshVerified, ...older];
+        if (MAX_NEWS_ITEMS > 0 && nextMerged.length > MAX_NEWS_ITEMS) nextMerged = nextMerged.slice(0, MAX_NEWS_ITEMS);
+
+        setIntelNews(nextMerged);
+        const nextDerived = deriveIntelLayersFromNews(nextMerged);
         setIntelEvents(nextDerived.events);
         setIntelInfrastructure(nextDerived.infrastructure);
         setIntelBattleResults(nextDerived.battleResults);
 
         // Patch arrow endpoints (keep original starts so the direction stays meaningful).
         const nextEnds = new Map<string, [number, number]>();
-        for (const item of updated) {
+        for (const item of freshVerified) {
           for (const sig of item.signals || []) {
-            if (sig.kind !== 'movement') continue;
+            if (sig.kind !== 'movement' && sig.kind !== 'unit') continue;
             const end = sig.movement?.to?.coordinates || sig.location.coordinates;
             const id = `intel-arrow:${item.id}:${sig.id}`;
             if (end) nextEnds.set(id, end);
@@ -687,6 +712,7 @@ export default function App() {
         <NewsPanel 
           settings={llmSettings} 
           news={intelNews}
+          latestBatchSize={latestBatchSize}
           loading={loadingNews}
           error={newsError}
           selectedNewsId={selectedNewsId}
