@@ -8,7 +8,7 @@ import { Arrow, BattleResult, Event, Infrastructure, IntelNewsItem, IntelSignal,
 import { IRAN_COORDINATES, MOCK_ARROWS, MOCK_BATTLE_RESULTS, MOCK_EVENTS, MOCK_INFRASTRUCTURE, MOCK_UNITS } from './constants';
 import { fetchIntelNews } from './services/llmService';
 import { verifyIntelLocation } from './services/geocodeService';
-import { Activity, Moon, Sun } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
 import { useI18n } from './i18n';
 
 type MapFocus = { coordinates: [number, number]; zoom?: number; key: string } | null;
@@ -751,14 +751,6 @@ export default function App() {
     <div className="flex h-screen w-full bg-slate-50 dark:bg-black text-slate-900 dark:text-slate-200 overflow-hidden font-sans transition-colors duration-300">
       {/* Main Map Area */}
       <div className="flex-1 relative p-4 pl-4 pr-2 pb-4 pt-4">
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 bg-white/90 dark:bg-slate-900/80 backdrop-blur-md px-6 py-3 rounded-full border border-slate-200 dark:border-slate-700 shadow-2xl transition-colors duration-300">
-          <Activity className="text-rose-500 animate-pulse" size={20} />
-          <h1 className="text-lg font-bold tracking-widest uppercase text-slate-800 dark:text-slate-100">
-            {t('app.title')}
-          </h1>
-          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping ml-2" />
-        </div>
-
         <div className="absolute top-6 right-6 z-10 flex items-center gap-2">
           <div
             className="flex items-center bg-white/90 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-full shadow-lg overflow-hidden"

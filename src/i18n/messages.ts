@@ -72,7 +72,7 @@ export const MESSAGES = {
     'enum.battleType.capture': 'Capture',
   },
   zh: {
-    'app.title': '伊朗态势室',
+    'app.title': '伊朗态势',
     'app.toggleTheme': '切换主题',
     'app.toggleLanguage': '切换语言',
     'app.lang.zh': '中文',
