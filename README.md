@@ -1,7 +1,3 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
 # Iran Situation Room
 
 一个现代、科技感的态势可视化仪表盘：左侧地图展示单位/事件/基础设施/战果等图层，右侧 `Live Intel` 通过可配置的 OpenAI 兼容接口拉取并汇总最新新闻。
