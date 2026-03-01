@@ -19,7 +19,7 @@ type MobileSheet = 'none' | 'news' | 'layers' | 'details';
 const DEFAULT_LLM_SETTINGS: LLMSettings = {
   endpoint: 'https://warapi1.zeabur.app/v1',
   apiKey: 'sk-api123433',
-  model: 'gpt-5.2-codex',
+  model: 'gpt-5.2',
   translationModel: 'gpt-5.1-codex-mini',
 };
 
