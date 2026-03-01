@@ -23,6 +23,9 @@ const DEFAULT_LLM_SETTINGS: LLMSettings = {
   translationModel: 'gpt-5.1-codex-mini',
 };
 
+const INTEL_NEWS_CACHE_KEY = 'intelNewsCacheV1';
+const INTEL_NEWS_CACHE_MAX_ITEMS = 60;
+
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -305,6 +308,116 @@ export default function App() {
       } catch (e) {
         console.error('Failed to parse settings');
       }
+    }
+  }, []);
+
+  // Load last successful intel cache for a fast first paint (real content only).
+  useEffect(() => {
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem(INTEL_NEWS_CACHE_KEY);
+    } catch {
+      raw = null;
+    }
+    if (!raw) return;
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+
+      const isValidLonLat = (coords: any): coords is [number, number] => (
+        Array.isArray(coords) &&
+        coords.length === 2 &&
+        typeof coords[0] === 'number' &&
+        typeof coords[1] === 'number' &&
+        Number.isFinite(coords[0]) &&
+        Number.isFinite(coords[1]) &&
+        coords[0] >= -180 &&
+        coords[0] <= 180 &&
+        coords[1] >= -90 &&
+        coords[1] <= 90
+      );
+
+      const safe: IntelNewsItem[] = [];
+      for (const it of parsed.slice(0, INTEL_NEWS_CACHE_MAX_ITEMS)) {
+        const url = String(it?.url || '').trim();
+        const title = String(it?.title || '').trim();
+        if (!url || !title) continue;
+
+        const signalsRaw = Array.isArray(it?.signals) ? it.signals : [];
+        const signals: IntelSignal[] = [];
+        for (const s of signalsRaw) {
+          const loc = s?.location || {};
+          const coords = isValidLonLat(loc?.coordinates) ? (loc.coordinates as [number, number]) : IRAN_COORDINATES;
+          signals.push({
+            id: String(s?.id || `sig-cache-${safe.length}-${signals.length}`).trim() || `sig-cache-${safe.length}-${signals.length}`,
+            kind: (s?.kind === 'event' || s?.kind === 'movement' || s?.kind === 'infrastructure' || s?.kind === 'battle' || s?.kind === 'unit')
+              ? s.kind
+              : 'event',
+            title: String(s?.title || title).trim() || title,
+            description: String(s?.description || '').trim(),
+            severity: (s?.severity === 'low' || s?.severity === 'medium' || s?.severity === 'high') ? s.severity : 'medium',
+            location: {
+              name: String(loc?.name || 'Iran').trim() || 'Iran',
+              country: typeof loc?.country === 'string' ? loc.country.trim() : undefined,
+              coordinates: coords,
+            },
+            movement: s?.movement,
+            unit: s?.unit,
+            infra: s?.infra,
+            battle: s?.battle,
+            evidence: String(s?.evidence || '').trim(),
+            confidence: clamp01(Number(s?.confidence)),
+            verified: typeof s?.verified === 'boolean' ? s.verified : undefined,
+          });
+        }
+
+        if (signals.length === 0) {
+          signals.push({
+            id: `sig-cache-${safe.length}-0`,
+            kind: 'event',
+            title,
+            description: String(it?.summary || '').trim(),
+            severity: 'low',
+            location: { name: 'Iran', coordinates: IRAN_COORDINATES },
+            evidence: '',
+            confidence: 0.05,
+          });
+        }
+
+        safe.push({
+          id: String(it?.id || '').trim() || `cached-${safe.length}`,
+          title,
+          summary: String(it?.summary || '').trim(),
+          source: String(it?.source || '').trim(),
+          url,
+          timestamp: String(it?.timestamp || '').trim(),
+          signals,
+        });
+      }
+
+      if (safe.length === 0) return;
+
+      setIntelNews(safe);
+      intelNewsRef.current = safe;
+      setLatestBatchSize(0);
+      for (const item of safe) {
+        const u = String(item?.url || '').trim();
+        if (u) seenNewsUrlsRef.current.add(u);
+      }
+
+      const derived = deriveIntelLayersFromNews(safe);
+      setIntelEvents(derived.events);
+      setIntelInfrastructure(derived.infrastructure);
+      setIntelBattleResults(derived.battleResults);
+
+      if (localeRef.current === 'zh') {
+        const texts: string[] = [];
+        for (const item of safe.slice(0, 20)) texts.push(item.title, item.summary);
+        enqueueTranslateTexts(texts);
+      }
+    } catch {
+      // Ignore cache parse/shape errors.
     }
   }, []);
 
@@ -706,13 +819,46 @@ export default function App() {
 
   async function refreshIntel() {
     const token = ++refreshSeq.current;
+    const batchId = `b:${Date.now()}`;
+    const shouldPreview = intelNewsRef.current.length === 0;
     setLoadingNews(true);
     setNewsError(null);
     try {
       const MAX_NEWS_ITEMS = 100;
       const mode = refreshCountRef.current === 0 ? 'initial' : 'refresh';
       const excludeUrls = Array.from(seenNewsUrlsRef.current);
-      const freshAll = await fetchIntelNews(llmSettings, { mode, excludeUrls, targetCount: 10 });
+      const freshAll = await fetchIntelNews(llmSettings, {
+        mode,
+        excludeUrls,
+        targetCount: 10,
+        onPreview: shouldPreview
+          ? (previewStable) => {
+              if (refreshSeq.current !== token) return;
+              const seen = new Set<string>();
+              const previewCanonical = (Array.isArray(previewStable) ? previewStable : []).filter(item => {
+                const url = String(item?.url || '').trim();
+                if (!url) return false;
+                if (seen.has(url)) return false;
+                seen.add(url);
+                return true;
+              });
+              const preview = previewCanonical.map((item, idx) => ({
+                ...item,
+                id: `${item.id}:${batchId}:${idx}`,
+              }));
+
+              if (preview.length === 0) return;
+              setIntelNews(preview);
+              intelNewsRef.current = preview;
+              setLatestBatchSize(0);
+
+              const derived = deriveIntelLayersFromNews(preview);
+              setIntelEvents(derived.events);
+              setIntelInfrastructure(derived.infrastructure);
+              setIntelBattleResults(derived.battleResults);
+            }
+          : undefined,
+      });
       if (refreshSeq.current !== token) return;
 
       // Dedupe within the freshly fetched batch by URL (keep first occurrence).
@@ -737,13 +883,13 @@ export default function App() {
       }
 
       // Preserve history by batches: new items always prepend, old items are never overwritten.
-      const batchId = `b:${Date.now()}`;
       const fresh = freshCanonical.map((item, idx) => ({
         ...item,
         id: `${item.id}:${batchId}:${idx}`,
       }));
 
-      const prev = intelNewsRef.current;
+      const freshIds = new Set(fresh.map(n => n.id));
+      const prev = intelNewsRef.current.filter(n => !freshIds.has(n.id));
       let merged = [...fresh, ...prev];
       if (merged.length > MAX_NEWS_ITEMS) merged = merged.slice(0, MAX_NEWS_ITEMS);
 
@@ -755,6 +901,15 @@ export default function App() {
         if (url) seenNewsUrlsRef.current.add(url);
       }
       refreshCountRef.current += 1;
+
+      try {
+        localStorage.setItem(
+          INTEL_NEWS_CACHE_KEY,
+          JSON.stringify(merged.slice(0, INTEL_NEWS_CACHE_MAX_ITEMS))
+        );
+      } catch {
+        // Ignore quota/serialization errors.
+      }
 
       // Derive clickable layers from signals and kick off sourced unit movement.
       const derived = deriveIntelLayersFromNews(merged);

@@ -273,6 +273,7 @@ export type FetchIntelNewsOptions = {
   mode?: 'initial' | 'refresh';
   excludeUrls?: string[];
   targetCount?: number;
+  onPreview?: (items: IntelNewsItem[]) => void;
 };
 
 export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNewsOptions = {}): Promise<IntelNewsItem[]> {
@@ -305,6 +306,42 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
   const sourceByUrl = new Map(rssArticles.map(a => [a.link, a.source] as const));
   const allowedSources = Array.from(new Set(rssArticles.map(a => a.source))).filter(Boolean).sort();
   const hasRss = rssArticles.length > 0;
+
+  // Emit a fast RSS-based preview immediately, so UI can render real items while waiting for the LLM.
+  if (hasRss && typeof opts.onPreview === 'function') {
+    try {
+      const preview: IntelNewsItem[] = rssArticles.map((a, i) => {
+        const stableId = stableNewsIdFromUrl(a.link) || `news-preview-${i}`;
+        const snippet = a.snippet || '';
+        return {
+          id: stableId,
+          title: a.title,
+          summary: snippet ? snippet.slice(0, 220) : '',
+          source: a.source || 'Unknown',
+          url: a.link,
+          timestamp: a.pubDate || new Date().toISOString(),
+          signals: [
+            {
+              id: `sig-${stableId}-preview`,
+              kind: 'event',
+              title: a.title || 'Intel Update',
+              description: snippet ? snippet.slice(0, 300) : '',
+              severity: 'low',
+              location: {
+                name: 'Iran',
+                coordinates: FALLBACK_IRAN_COORDINATES,
+              },
+              evidence: snippet.slice(0, 120),
+              confidence: 0.05,
+            },
+          ],
+        };
+      });
+      opts.onPreview(preview);
+    } catch {
+      // Preview is best-effort; ignore callback/render failures.
+    }
+  }
 
   const system = [
     'You are a military intelligence analyst.',
