@@ -14,6 +14,8 @@ export interface Unit extends GeoPoint {
   newsId?: string;
   confidence?: number;
   verified?: boolean;
+  locationReliability?: LocationReliability;
+  mentions?: Array<{ name: string; country?: string }>;
 }
 
 export interface Event extends GeoPoint {
@@ -25,6 +27,8 @@ export interface Event extends GeoPoint {
   newsId?: string;
   confidence?: number;
   verified?: boolean;
+  locationReliability?: LocationReliability;
+  mentions?: Array<{ name: string; country?: string }>;
 }
 
 export interface Arrow {
@@ -37,6 +41,7 @@ export interface Arrow {
   newsId?: string;
   confidence?: number;
   verified?: boolean;
+  locationReliability?: LocationReliability;
 }
 
 export interface Annotation extends GeoPoint {
@@ -53,6 +58,8 @@ export interface Infrastructure extends GeoPoint {
   newsId?: string;
   confidence?: number;
   verified?: boolean;
+  locationReliability?: LocationReliability;
+  mentions?: Array<{ name: string; country?: string }>;
 }
 
 export interface BattleResult extends GeoPoint {
@@ -64,6 +71,8 @@ export interface BattleResult extends GeoPoint {
   newsId?: string;
   confidence?: number;
   verified?: boolean;
+  locationReliability?: LocationReliability;
+  mentions?: Array<{ name: string; country?: string }>;
 }
 
 export interface NewsItem {
@@ -88,6 +97,30 @@ export interface IntelLocation {
 }
 
 export type IntelSignalKind = 'event' | 'movement' | 'infrastructure' | 'battle' | 'unit';
+
+export type NewsScope = 'global' | 'americas' | 'europe' | 'africa' | 'middle_east' | 'asia_pacific';
+
+export type NewsCategory =
+  | 'conflict'
+  | 'politics'
+  | 'economy'
+  | 'disaster'
+  | 'health'
+  | 'tech'
+  | 'science'
+  | 'energy'
+  | 'other';
+
+export interface Hotspot {
+  id: string;
+  label: string;
+  center: [number, number];
+  score: number;
+  count: number;
+  categories: Partial<Record<NewsCategory, number>>;
+}
+
+export type LocationReliability = 'verified' | 'llm_inferred' | 'capital_fallback';
 
 export interface IntelSignal {
   id: string;
@@ -117,10 +150,15 @@ export interface IntelSignal {
   evidence: string;
   confidence: number;
   verified?: boolean;
+  locationReliability?: LocationReliability;
 }
 
 export interface IntelNewsItem extends NewsItem {
   signals: IntelSignal[];
+  scope?: NewsScope;
+  category?: NewsCategory;
+  isPreview?: boolean;
+  mentions?: Array<{ name: string; country?: string }>;
 }
 
 export interface MapFilters {

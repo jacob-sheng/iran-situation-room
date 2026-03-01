@@ -23,6 +23,19 @@ export default function DetailsPanel({ selectedItem, onClose, embedded = false, 
   const sources = (selectedItem as any).sources as { name: string; url: string; timestamp: string }[] | undefined;
   const confidence = (selectedItem as any).confidence as number | undefined;
   const verified = (selectedItem as any).verified as boolean | undefined;
+  const reliability = (selectedItem as any).locationReliability as any;
+  const mentions = (selectedItem as any).mentions as Array<{ name: string; country?: string }> | undefined;
+  const onSelectMention = (selectedItem as any).onSelectMention as ((m: { name: string; country?: string }) => void) | undefined;
+
+  const formatLat = (lat: number) => {
+    const v = Math.abs(lat).toFixed(4);
+    return `${v}\u00b0${lat >= 0 ? 'N' : 'S'}`;
+  };
+
+  const formatLon = (lon: number) => {
+    const v = Math.abs(lon).toFixed(4);
+    return `${v}\u00b0${lon >= 0 ? 'E' : 'W'}`;
+  };
 
   const getHeaderColor = () => {
     if (isUnit) {
@@ -123,7 +136,7 @@ export default function DetailsPanel({ selectedItem, onClose, embedded = false, 
           <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
             <MapPin size={16} className="text-slate-400 dark:text-slate-500 shrink-0" />
             <span className="font-mono">
-              {selectedItem.coordinates[1].toFixed(4)}°N, {selectedItem.coordinates[0].toFixed(4)}°E
+              {formatLat(selectedItem.coordinates[1])}, {formatLon(selectedItem.coordinates[0])}
             </span>
           </div>
 
@@ -142,6 +155,48 @@ export default function DetailsPanel({ selectedItem, onClose, embedded = false, 
                   {verified ? t('details.verified') : t('details.unverified')}
                 </span>
               )}
+            </div>
+          )}
+
+          {typeof reliability === 'string' && (
+            <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
+              <span>{t('details.locationReliability')}</span>
+              <span className={clsx(
+                "uppercase tracking-wider",
+                reliability === 'verified'
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : reliability === 'capital_fallback'
+                    ? "text-amber-700 dark:text-amber-400"
+                    : "text-slate-600 dark:text-slate-300"
+              )}>
+                {t((`details.locationReliability.${reliability}`) as any)}
+              </span>
+            </div>
+          )}
+
+          {Array.isArray(mentions) && mentions.length > 0 && (
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                {t('details.mentions')}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {mentions.slice(0, 10).map((m, idx) => (
+                  <button
+                    key={`${m.name}-${idx}`}
+                    type="button"
+                    onClick={() => onSelectMention?.(m)}
+                    className={clsx(
+                      "px-2 py-1 rounded-full border text-[11px] font-mono transition-colors",
+                      onSelectMention
+                        ? "cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800"
+                        : "cursor-default",
+                      "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+                    )}
+                  >
+                    {m.name}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

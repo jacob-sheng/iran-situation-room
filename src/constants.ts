@@ -2,6 +2,9 @@ import { Unit, Event, Arrow, Annotation, Infrastructure, BattleResult } from './
 
 // Coordinates: [longitude, latitude]
 export const IRAN_COORDINATES: [number, number] = [53.6880, 32.4279];
+export const DEFAULT_MAP_CENTER: [number, number] = [0, 20];
+export const DEFAULT_MAP_ZOOM_DESKTOP = 1.6;
+export const DEFAULT_MAP_ZOOM_MOBILE = 1.3;
 export const TEHRAN_COORDINATES: [number, number] = [51.3890, 35.6892];
 export const STRAIT_OF_HORMUZ: [number, number] = [56.2641, 26.5683];
 export const PERSIAN_GULF: [number, number] = [51.6825, 26.9605];

@@ -1,46 +1,10 @@
-import { IntelNewsItem, IntelSignal, LLMSettings, NewsItem } from '../types';
+import { IntelNewsItem, IntelSignal, LLMSettings, NewsCategory, NewsScope, NewsItem } from '../types';
+import { DEFAULT_MAP_CENTER } from '../constants';
+import { extractMentions, pickBestMentionForFallback, resolveToCapital } from './placeMentions';
+import { RSS_SOURCES_BY_SCOPE } from './rssSources';
+import { canonicalizeUrl, fetchRssPool, type RssArticle } from './rssClient';
 
-const FALLBACK_IRAN_COORDINATES: [number, number] = [53.6880, 32.4279];
-
-type RssSource = { name: string; url: string };
-
-// A minimal multi-perspective RSS set (>=10 sources).
-const RSS_SOURCES: RssSource[] = [
-  { name: 'BBC', url: 'https://feeds.bbci.co.uk/news/world/middle_east/rss.xml' },
-  { name: 'CNN', url: 'http://rss.cnn.com/rss/edition_world.rss' },
-  { name: 'Xinhua', url: 'http://www.xinhuanet.com/english/rss/worldrss.xml' },
-  { name: 'DW', url: 'https://rss.dw.com/rdf/rss-en-top' },
-  { name: 'RT', url: 'https://www.rt.com/rss/news/' },
-  { name: 'TASS', url: 'https://tass.com/rss/v2.xml' },
-  { name: 'Tehran Times', url: 'https://www.tehrantimes.com/rss' },
-  { name: 'Jerusalem Post', url: 'https://www.jpost.com/Rss/RssFeedsHeadlines.aspx' },
-  { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
-  { name: 'UN News', url: 'https://news.un.org/feed/subscribe/en/news/all/rss.xml' },
-];
-
-function canonicalizeUrl(url: string) {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  try {
-    const u = new URL(raw);
-    u.hash = '';
-    const params = u.searchParams;
-    // Remove common tracking params.
-    for (const key of Array.from(params.keys())) {
-      const lower = key.toLowerCase();
-      if (lower.startsWith('utm_')) params.delete(key);
-    }
-    params.delete('fbclid');
-    params.delete('gclid');
-    params.delete('igshid');
-    params.delete('mc_cid');
-    params.delete('mc_eid');
-    return u.toString();
-  } catch {
-    // Best-effort fallback: strip fragment only.
-    return raw.split('#')[0].trim();
-  }
-}
+const FALLBACK_COORDINATES: [number, number] = DEFAULT_MAP_CENTER;
 
 // Stable hash for IDs derived from URLs (keeps selection stable across refreshes).
 function fnv1a32(input: string) {
@@ -56,29 +20,6 @@ function stableNewsIdFromUrl(url: string) {
   const u = String(url || '').trim();
   if (!u) return '';
   return `news:${fnv1a32(u).toString(36)}`;
-}
-
-function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(id);
-  }
-}
-
-function stripHtml(input: string) {
-  return input
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 function clamp01(n: number) {
@@ -136,141 +77,78 @@ function normalizeEvidence(evidence: any, snippet: string) {
   return snippet.slice(0, 120);
 }
 
-type RssArticle = { index: number; title: string; link: string; pubDate: string; snippet: string; source: string };
-
-function parseXmlFeed(xmlText: string, source: string) {
-  const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
-  if (doc.getElementsByTagName('parsererror').length > 0) {
-    throw new Error('Invalid XML');
+function asCategory(input: any): NewsCategory {
+  const v = typeof input === 'string' ? input.trim().toLowerCase() : '';
+  if (
+    v === 'conflict' ||
+    v === 'politics' ||
+    v === 'economy' ||
+    v === 'disaster' ||
+    v === 'health' ||
+    v === 'tech' ||
+    v === 'science' ||
+    v === 'energy' ||
+    v === 'other'
+  ) {
+    return v;
   }
-
-  const escapeNs = (tag: string) => tag.replace(/:/g, '\\:');
-  const pickText = (root: ParentNode, tags: string[]) => {
-    for (const t of tags) {
-      const el = root.querySelector(escapeNs(t));
-      const text = el?.textContent ? String(el.textContent).trim() : '';
-      if (text) return text;
-    }
-    return '';
-  };
-
-  const out: Array<Omit<RssArticle, 'index'>> = [];
-
-  const rssItems = Array.from(doc.querySelectorAll('item'));
-  if (rssItems.length > 0) {
-    for (const item of rssItems) {
-      const title = pickText(item, ['title']);
-      const link = canonicalizeUrl(pickText(item, ['link']));
-      const pubDate = pickText(item, ['pubDate', 'dc:date']);
-      const snippet = stripHtml(pickText(item, ['description', 'content:encoded']));
-      if (!title || !link) continue;
-      out.push({ title, link, pubDate, snippet, source });
-    }
-    return out;
-  }
-
-  const atomEntries = Array.from(doc.querySelectorAll('entry'));
-  for (const entry of atomEntries) {
-    const title = pickText(entry, ['title']);
-    const pubDate = pickText(entry, ['updated', 'published']);
-    const snippet = stripHtml(pickText(entry, ['summary', 'content']));
-    const linkEl =
-      entry.querySelector('link[rel="alternate"][href]') ||
-      entry.querySelector('link[href]') ||
-      entry.querySelector('link');
-    const link = canonicalizeUrl(String((linkEl as any)?.getAttribute?.('href') || linkEl?.textContent || '').trim());
-    if (!title || !link) continue;
-    out.push({ title, link, pubDate, snippet, source });
-  }
-  return out;
+  return 'other';
 }
 
-async function fetchFeedViaRss2Json(src: RssSource, limit: number) {
-  const api = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(src.url)}&count=${encodeURIComponent(String(limit))}`;
-  const res = await fetchWithTimeout(api, { headers: { 'accept': 'application/json' } }, 8000);
-  const data = await res.json();
-  if (!data || data.status !== 'ok' || !Array.isArray(data.items)) {
-    throw new Error('rss2json error');
-  }
-  return data.items.slice(0, limit).map((item: any) => {
-    const title = String(item?.title || '').trim();
-    const link = canonicalizeUrl(String(item?.link || '').trim());
-    const pubDate = String(item?.pubDate || item?.publishedDate || item?.date || '').trim();
-    const snippet = stripHtml(String(item?.description || item?.content || ''));
-    return { title, link, pubDate, snippet, source: src.name };
-  }).filter((a: any) => a.title && a.link);
+function guessCategory(text: string): NewsCategory {
+  const t = String(text || '').toLowerCase();
+  if (!t) return 'other';
+  if (/(strike|missile|drone|attack|war|battle|shell|air\s*raid|invasion|ceasefire|hostage|terror|military)/.test(t)) return 'conflict';
+  if (/(election|parliament|president|prime\s*minister|diplomacy|sanction|treaty|protest|policy|vote)/.test(t)) return 'politics';
+  if (/(market|stocks|inflation|gdp|trade|tariff|bank|interest\s*rate|oil\s*price|jobs|econom)/.test(t)) return 'economy';
+  if (/(earthquake|hurricane|storm|flood|wildfire|tsunami|eruption|disaster|rescue)/.test(t)) return 'disaster';
+  if (/(outbreak|virus|covid|flu|ebola|vaccine|who|health|disease)/.test(t)) return 'health';
+  if (/(ai|chip|semiconductor|software|cyber|hack|iphone|google|microsoft|openai|tech)/.test(t)) return 'tech';
+  if (/(nasa|space|rocket|telescope|research|study|science|quantum)/.test(t)) return 'science';
+  if (/(oil|gas|pipeline|refinery|power\s*grid|nuclear|uranium|energy)/.test(t)) return 'energy';
+  return 'other';
 }
 
-async function fetchFeedViaAllOrigins(src: RssSource, limit: number) {
-  const target = `https://api.allorigins.win/raw?url=${encodeURIComponent(src.url)}`;
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetchWithTimeout(target, { headers: { 'accept': '*/*' } }, 9000);
-      const text = await res.text();
-      // Some sources return HTML error pages; the XML parser will reject them.
-      const parsed = parseXmlFeed(text, src.name);
-      return parsed.slice(0, limit);
-    } catch (e) {
-      lastErr = e;
-      await sleep(500 + attempt * 750);
-    }
-  }
-  throw lastErr || new Error('allorigins error');
+function buildCapitalFallback(title: string, snippet: string) {
+  const mentions = extractMentions(`${title}\n${snippet}`);
+  const picked = pickBestMentionForFallback(mentions);
+  const cap = picked ? resolveToCapital(picked) : null;
+  const coords = cap?.coordinates || FALLBACK_COORDINATES;
+  const country = picked || undefined;
+  return { mentions, picked, coords, country };
 }
 
-async function fetchFeedItems(src: RssSource, limit: number) {
-  try {
-    const via = await fetchFeedViaRss2Json(src, limit);
-    if (via.length > 0) return via;
-  } catch {
-    // fall through
-  }
-  return await fetchFeedViaAllOrigins(src, limit);
+function buildPreviewSignal(title: string, snippet: string, fallback: { picked: string; coords: [number, number]; country?: string }) {
+  const stableId = stableNewsIdFromUrl(title || snippet) || `sig-${Date.now().toString(36)}`;
+  return {
+    id: `sig-${stableId}-preview`,
+    kind: 'event',
+    title: title || 'Intel Update',
+    description: snippet ? snippet.slice(0, 300) : '',
+    severity: 'low',
+    location: {
+      name: fallback.picked || fallback.country || 'Unknown',
+      country: fallback.country,
+      coordinates: fallback.coords,
+    },
+    evidence: snippet.slice(0, 120),
+    confidence: 0.05,
+    verified: false,
+    locationReliability: 'capital_fallback' as const,
+  } satisfies IntelSignal;
 }
 
-function parseDateMs(ts: string) {
-  const n = Date.parse(ts || '');
-  return Number.isFinite(n) ? n : 0;
-}
-
-type FetchRssArticlesOptions = { perSourceLimit: number; maxTotal: number; excludeUrls?: Set<string> };
-
-async function fetchRssArticles(opts: FetchRssArticlesOptions): Promise<RssArticle[]> {
-  const perSourceLimit = Math.max(1, Math.floor(opts.perSourceLimit));
-  const maxTotal = Math.max(1, Math.floor(opts.maxTotal));
-  const exclude = opts.excludeUrls || new Set<string>();
-
-  const settled = await Promise.allSettled(RSS_SOURCES.map(s => fetchFeedItems(s, perSourceLimit)));
-  const flat: Array<Omit<RssArticle, 'index'>> = [];
-  for (const r of settled) {
-    if (r.status !== 'fulfilled') continue;
-    for (const it of r.value) {
-      const title = String(it?.title || '').trim();
-      const link = canonicalizeUrl(String(it?.link || '').trim());
-      const pubDate = String(it?.pubDate || '').trim();
-      const snippet = String(it?.snippet || '').trim();
-      const source = String(it?.source || '').trim();
-      if (!title || !link) continue;
-      flat.push({ title, link, pubDate, snippet, source });
-    }
-  }
-
-  const byLink = new Map<string, Omit<RssArticle, 'index'>>();
-  for (const it of flat) {
-    const key = it.link;
-    if (!key || exclude.has(key)) continue;
-    if (!byLink.has(key)) byLink.set(key, it);
-  }
-
-  const list = Array.from(byLink.values());
-  list.sort((a, b) => parseDateMs(b.pubDate) - parseDateMs(a.pubDate));
-
-  return list.slice(0, maxTotal).map((it, index) => ({ index, ...it }));
+function sanitizeLocation(loc: any, fallback: { picked: string; coords: [number, number]; country?: string }) {
+  const name = String(loc?.name || '').trim() || fallback.picked || 'Unknown';
+  const country = typeof loc?.country === 'string' ? loc.country.trim() : fallback.country;
+  const coords = isValidLonLat(loc?.coordinates) ? (loc.coordinates as [number, number]) : fallback.coords;
+  const usedFallback = !isValidLonLat(loc?.coordinates);
+  return { name, country, coords, usedFallback };
 }
 
 export type FetchIntelNewsOptions = {
   mode?: 'initial' | 'refresh';
+  scope?: NewsScope;
   excludeUrls?: string[];
   targetCount?: number;
   onPreview?: (items: IntelNewsItem[]) => void;
@@ -283,36 +161,65 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
 
   const targetCount = Math.max(1, Math.floor(opts.targetCount ?? 10));
   const mode = opts.mode === 'initial' ? 'initial' : 'refresh';
-  const exclude = new Set((opts.excludeUrls || []).map(u => canonicalizeUrl(u)).filter(Boolean));
+  const scope: NewsScope = (opts.scope === 'americas' || opts.scope === 'europe' || opts.scope === 'africa' || opts.scope === 'middle_east' || opts.scope === 'asia_pacific')
+    ? opts.scope
+    : 'global';
 
+  const exclude = new Set((opts.excludeUrls || []).map(u => canonicalizeUrl(u)).filter(Boolean));
   const depthCandidates = mode === 'initial' ? [20, 40, 80] : [10, 20, 40, 80];
+  const sources = RSS_SOURCES_BY_SCOPE[scope] || RSS_SOURCES_BY_SCOPE.global;
 
   let rssArticles: RssArticle[] = [];
   for (const depth of depthCandidates) {
     try {
-      const pool = await fetchRssArticles({ perSourceLimit: depth, maxTotal: 400, excludeUrls: exclude });
+      const pool = await fetchRssPool({
+        scope,
+        sources,
+        perSourceLimit: depth,
+        maxTotal: 400,
+        excludeUrls: exclude,
+        minNeeded: targetCount * 6,
+        concurrency: 4,
+        timeBudgetMs: mode === 'initial' ? 5500 : 3500,
+      });
+
       if (pool.length >= targetCount) {
         rssArticles = pool.slice(0, targetCount);
         break;
       }
       rssArticles = pool;
     } catch {
+      // Try next depth.
       rssArticles = [];
     }
+  }
+
+  if (rssArticles.length === 0) {
+    // Keep the "no invented content" guarantee.
+    return [];
   }
 
   const allowedUrls = new Set(rssArticles.map(a => a.link));
   const snippetByUrl = new Map(rssArticles.map(a => [a.link, a.snippet] as const));
   const sourceByUrl = new Map(rssArticles.map(a => [a.link, a.source] as const));
-  const allowedSources = Array.from(new Set(rssArticles.map(a => a.source))).filter(Boolean).sort();
-  const hasRss = rssArticles.length > 0;
+  const mentionsByUrl = new Map<string, Array<{ name: string; country?: string }>>();
+  const fallbackByUrl = new Map<string, { mentions: Array<{ name: string; country?: string }>; picked: string; coords: [number, number]; country?: string }>();
+  const categoryByUrl = new Map<string, NewsCategory>();
+
+  for (const a of rssArticles) {
+    const m = buildCapitalFallback(a.title, a.snippet);
+    mentionsByUrl.set(a.link, m.mentions);
+    fallbackByUrl.set(a.link, m);
+    categoryByUrl.set(a.link, guessCategory(`${a.title}\n${a.snippet}`));
+  }
 
   // Emit a fast RSS-based preview immediately, so UI can render real items while waiting for the LLM.
-  if (hasRss && typeof opts.onPreview === 'function') {
+  if (typeof opts.onPreview === 'function') {
     try {
       const preview: IntelNewsItem[] = rssArticles.map((a, i) => {
         const stableId = stableNewsIdFromUrl(a.link) || `news-preview-${i}`;
         const snippet = a.snippet || '';
+        const fallback = fallbackByUrl.get(a.link) || buildCapitalFallback(a.title, a.snippet);
         return {
           id: stableId,
           title: a.title,
@@ -320,44 +227,33 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
           source: a.source || 'Unknown',
           url: a.link,
           timestamp: a.pubDate || new Date().toISOString(),
-          signals: [
-            {
-              id: `sig-${stableId}-preview`,
-              kind: 'event',
-              title: a.title || 'Intel Update',
-              description: snippet ? snippet.slice(0, 300) : '',
-              severity: 'low',
-              location: {
-                name: 'Iran',
-                coordinates: FALLBACK_IRAN_COORDINATES,
-              },
-              evidence: snippet.slice(0, 120),
-              confidence: 0.05,
-            },
-          ],
+          signals: [buildPreviewSignal(a.title, snippet, fallback)],
+          scope,
+          category: categoryByUrl.get(a.link) || 'other',
+          isPreview: true,
+          mentions: fallback.mentions,
         };
       });
       opts.onPreview(preview);
     } catch {
-      // Preview is best-effort; ignore callback/render failures.
+      // Preview is best-effort.
     }
   }
 
+  const allowedSources = Array.from(new Set(rssArticles.map(a => a.source))).filter(Boolean).sort();
+
   const system = [
-    'You are a military intelligence analyst.',
-    hasRss
-      ? `You will be given ${rssArticles.length} RSS articles about the Middle East / Iran situation from multiple sources.`
-      : 'RSS articles may be unavailable; use credible source URLs.',
-    hasRss
-      ? `Generate exactly ${rssArticles.length} news items (one per provided RSS article) and return ONLY a valid JSON array (no markdown).`
-      : `Generate ${targetCount} news items and return ONLY a valid JSON array (no markdown).`,
+    'You are a real-time intelligence analyst.',
+    `You will be given ${rssArticles.length} RSS articles about global breaking news from multiple sources.`,
+    `Generate exactly ${rssArticles.length} news items (one per provided RSS article) and return ONLY a valid JSON array (no markdown).`,
     '',
     'Each news item MUST be an object with keys:',
     '- id (string)',
     '- title (string)',
     '- summary (string, 1-2 sentences)',
-    `- source (string${hasRss ? ', MUST match the source name of the chosen url' : ''})`,
-    `- url (string${hasRss ? ', MUST be one of the provided RSS links' : ''})`,
+    '- category (string, one of: conflict|politics|economy|disaster|health|tech|science|energy|other)',
+    '- source (string, MUST match the source name of the chosen url)',
+    '- url (string, MUST be one of the provided RSS links)',
     '- timestamp (string, ISO-like date or best-effort)',
     '- signals (array, at least 1 element)',
     '',
@@ -379,9 +275,10 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
     '',
     'Notes:',
     '- coordinates MUST be [longitude, latitude].',
-    hasRss ? '- url MUST come from the provided RSS links list. Do not invent URLs.' : '- If no RSS links are provided, use credible source URLs.',
-    hasRss ? '- Keep url and source exactly as provided for each article.' : '- Provide a working url for each item.',
+    '- url MUST come from the provided RSS links list. Do not invent URLs.',
+    '- Keep url and source exactly as provided for each article.',
     '- If kind="movement", include movement.to (it can be the same as location).',
+    '- If you are unsure about the exact city, use the best country/region mentioned in the article and provide coordinates near its capital.',
     '- Do not include any markdown formatting like ```json.',
   ].join('\n');
 
@@ -391,8 +288,9 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
       title: a.title,
       url: a.link,
       timestamp: a.pubDate,
-      snippet: a.snippet.slice(0, 500),
+      snippet: (a.snippet || '').slice(0, 500),
       source: a.source,
+      scope: a.scope,
     })),
     allowed_urls: rssArticles.map(a => a.link),
     allowed_sources: allowedSources,
@@ -418,18 +316,16 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
   }
 
   const data = await response.json();
-  const text: string | undefined = data.choices[0]?.message?.content;
+  const text: string | undefined = data.choices?.[0]?.message?.content;
   if (!text) return [];
 
   const cleanedText = String(text).replace(/```json/g, '').replace(/```/g, '').trim();
   let parsed: any;
   try {
     parsed = JSON.parse(cleanedText);
-  } catch (e) {
-    console.error('Failed to parse LLM response as JSON', e, cleanedText);
+  } catch {
     return [];
   }
-
   if (!Array.isArray(parsed)) return [];
 
   const outByUrl = new Map<string, IntelNewsItem>();
@@ -437,25 +333,27 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
     const raw = parsed[i] || {};
     const title = String(raw.title || '').trim();
     const summary = String(raw.summary || '').trim();
+    const timestamp = String(raw.timestamp || '').trim();
     let source = String(raw.source || '').trim();
     let url = canonicalizeUrl(String(raw.url || '').trim());
-    const timestamp = String(raw.timestamp || '').trim();
-    const fallbackId = String(raw.id || `news-${i}`).trim() || `news-${i}`;
 
     if (allowedUrls.size > 0 && url && !allowedUrls.has(url)) {
       const picked = pickBestUrlFromRss(title, rssArticles);
       if (picked) url = picked;
     }
     if (!url && rssArticles[i]?.link) url = rssArticles[i].link;
-
     if (allowedUrls.size > 0 && (!url || !allowedUrls.has(url))) continue;
 
-    const stableId = stableNewsIdFromUrl(url) || fallbackId;
+    const stableId = stableNewsIdFromUrl(url) || String(raw.id || `news-${i}`).trim() || `news-${i}`;
 
     const snippet = snippetByUrl.get(url) || '';
     const mappedSource = sourceByUrl.get(url);
     if (mappedSource) source = mappedSource;
     if (!source) source = mappedSource || 'Unknown';
+
+    const fallback = fallbackByUrl.get(url) || buildCapitalFallback(title, snippet);
+    const mentions = mentionsByUrl.get(url) || fallback.mentions;
+
     const rawSignals = Array.isArray(raw.signals) ? raw.signals : [];
     const signals: IntelSignal[] = [];
 
@@ -463,10 +361,9 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
       const s = rawSignals[j] || {};
       const kind = asKind(s.kind);
       const sev = asSeverity(s.severity);
+
       const loc = s.location || {};
-      const locName = String(loc.name || '').trim() || title || 'Unknown';
-      const locCountry = typeof loc.country === 'string' ? loc.country.trim() : undefined;
-      const coords = isValidLonLat(loc.coordinates) ? (loc.coordinates as [number, number]) : FALLBACK_IRAN_COORDINATES;
+      const locSan = sanitizeLocation(loc, fallback);
       const confidence = clamp01(Number(s.confidence));
 
       const signal: IntelSignal = {
@@ -476,9 +373,9 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
         description: String(s.description || '').trim() || summary || '',
         severity: sev,
         location: {
-          name: locName,
-          country: locCountry,
-          coordinates: coords,
+          name: locSan.name,
+          country: locSan.country,
+          coordinates: locSan.coords,
         },
         movement: s.movement,
         unit: s.unit,
@@ -487,29 +384,49 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
         evidence: normalizeEvidence(s.evidence, snippet),
         confidence,
         verified: typeof s.verified === 'boolean' ? s.verified : undefined,
+        locationReliability: locSan.usedFallback ? 'capital_fallback' : 'llm_inferred',
       };
 
-      // Ensure evidence constraint and a usable location.
-      if (!signal.location.coordinates) signal.location.coordinates = FALLBACK_IRAN_COORDINATES;
+      // Sanitize movement endpoints (best-effort, still sourced).
+      if (signal.movement) {
+        const from = signal.movement.from;
+        const to = signal.movement.to;
+        if (from) {
+          const sFrom = sanitizeLocation(from, fallback);
+          signal.movement = { ...signal.movement, from: { name: sFrom.name, country: sFrom.country, coordinates: sFrom.coords } };
+        }
+        if (to) {
+          const sTo = sanitizeLocation(to, fallback);
+          signal.movement = { ...signal.movement, to: { name: sTo.name, country: sTo.country, coordinates: sTo.coords } };
+        }
+      }
+
+      // Ensure evidence constraint.
       if (!signal.evidence) signal.evidence = snippet.slice(0, 120);
       signals.push(signal);
     }
 
     if (signals.length === 0) {
+      const snippetSafe = snippet || '';
       signals.push({
         id: `sig-${stableId}-0`,
         kind: 'event',
         title: title || 'Intel Update',
-        description: summary || '',
+        description: summary || snippetSafe.slice(0, 300),
         severity: 'low',
         location: {
-          name: 'Iran',
-          coordinates: FALLBACK_IRAN_COORDINATES,
+          name: fallback.picked || fallback.country || 'Unknown',
+          country: fallback.country,
+          coordinates: fallback.coords,
         },
-        evidence: snippet.slice(0, 120),
+        evidence: snippetSafe.slice(0, 120),
         confidence: 0.1,
+        verified: false,
+        locationReliability: 'capital_fallback',
       });
     }
+
+    const cat = asCategory(raw.category) || categoryByUrl.get(url) || guessCategory(`${title}\n${snippet}`);
 
     const item: IntelNewsItem = {
       id: stableId,
@@ -519,14 +436,13 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
       url,
       timestamp,
       signals,
+      scope,
+      category: cat,
+      isPreview: false,
+      mentions,
     };
 
     if (url && !outByUrl.has(url)) outByUrl.set(url, item);
-  }
-
-  if (!hasRss) {
-    const list = Array.from(outByUrl.values());
-    return list.slice(0, targetCount);
   }
 
   const final: IntelNewsItem[] = [];
@@ -540,6 +456,7 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
 
     const stableId = stableNewsIdFromUrl(a.link) || `news-fallback-${i}`;
     const snippet = a.snippet || '';
+    const fallback = fallbackByUrl.get(a.link) || buildCapitalFallback(a.title, a.snippet);
     final.push({
       id: stableId,
       title: a.title,
@@ -547,6 +464,10 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
       source: a.source || 'Unknown',
       url: a.link,
       timestamp: a.pubDate || new Date().toISOString(),
+      scope,
+      category: categoryByUrl.get(a.link) || guessCategory(`${a.title}\n${snippet}`),
+      isPreview: false,
+      mentions: fallback.mentions,
       signals: [
         {
           id: `sig-${stableId}-0`,
@@ -555,11 +476,14 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
           description: snippet ? snippet.slice(0, 300) : '',
           severity: 'low',
           location: {
-            name: 'Iran',
-            coordinates: FALLBACK_IRAN_COORDINATES,
+            name: fallback.picked || fallback.country || 'Unknown',
+            country: fallback.country,
+            coordinates: fallback.coords,
           },
           evidence: snippet.slice(0, 120),
           confidence: 0.05,
+          verified: false,
+          locationReliability: 'capital_fallback',
         },
       ],
     });
@@ -568,23 +492,10 @@ export async function fetchIntelNews(settings: LLMSettings, opts: FetchIntelNews
   return final.slice(0, targetCount);
 }
 
+// Legacy API (not used by the current UI, kept for reference).
 export async function fetchLatestNews(settings: LLMSettings): Promise<NewsItem[]> {
   if (!settings.endpoint || !settings.apiKey) {
     throw new Error('API Endpoint and Key are required. Please configure them in settings.');
-  }
-
-  // Fetch real-time context from public RSS to feed the LLM
-  let realTimeContext = "";
-  try {
-    const rssUrl = encodeURIComponent('https://feeds.bbci.co.uk/news/world/middle_east/rss.xml');
-    const rssRes = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${rssUrl}`);
-    const rssData = await rssRes.json();
-    if (rssData.status === 'ok' && rssData.items) {
-      const articles = rssData.items.slice(0, 10).map((item: any) => `- ${item.title}: ${item.description} (${item.link})`).join('\n');
-      realTimeContext = `\n\nHere is the latest real-time news context retrieved just now:\n${articles}\n\nPlease summarize and select the 5 most important items from this context.`;
-    }
-  } catch (e) {
-    console.warn("Could not fetch RSS feed, relying on LLM internal knowledge.");
   }
 
   try {
@@ -597,13 +508,13 @@ export async function fetchLatestNews(settings: LLMSettings): Promise<NewsItem[]
       body: JSON.stringify({
         model: settings.model || 'gpt-3.5-turbo',
         messages: [
-          { 
-            role: 'system', 
-            content: 'You are a military intelligence analyst. Provide the 5 latest news items about the Middle East/Iran situation. Return ONLY a valid JSON array of objects with keys: id (string), title (string), summary (string), source (string), url (string), timestamp (string). Do not include any markdown formatting like ```json.' 
+          {
+            role: 'system',
+            content: 'Provide the 5 latest global breaking news items. Return ONLY a valid JSON array of objects with keys: id, title, summary, source, url, timestamp.'
           },
-          { 
-            role: 'user', 
-            content: `Latest news updates please.${realTimeContext}` 
+          {
+            role: 'user',
+            content: 'Latest news updates please.'
           }
         ]
       })
@@ -614,22 +525,12 @@ export async function fetchLatestNews(settings: LLMSettings): Promise<NewsItem[]
     }
 
     const data = await response.json();
-    const text = data.choices[0]?.message?.content;
-    
+    const text = data.choices?.[0]?.message?.content;
     if (!text) return [];
 
-    try {
-      // Clean up potential markdown formatting if the LLM ignored the instruction
-      const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(cleanedText);
-      if (Array.isArray(parsed)) {
-        return parsed as NewsItem[];
-      }
-      return [];
-    } catch (e) {
-      console.error('Failed to parse LLM response as JSON', e, text);
-      return [];
-    }
+    const cleanedText = String(text).replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanedText);
+    return Array.isArray(parsed) ? (parsed as NewsItem[]) : [];
   } catch (error) {
     console.error('Error fetching news from LLM:', error);
     throw error;

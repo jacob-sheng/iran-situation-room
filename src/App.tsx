@@ -4,10 +4,13 @@ import NewsPanel from './components/NewsPanel';
 import ControlPanel from './components/ControlPanel';
 import DetailsPanel from './components/DetailsPanel';
 import SettingsModal from './components/SettingsModal';
-import { Arrow, BattleResult, Event, Infrastructure, IntelNewsItem, IntelSignal, LLMSettings, MapFilters, SourceRef, Unit } from './types';
-import { IRAN_COORDINATES, MOCK_ARROWS, MOCK_BATTLE_RESULTS, MOCK_EVENTS, MOCK_INFRASTRUCTURE, MOCK_UNITS } from './constants';
+import { Arrow, BattleResult, Event, Hotspot, Infrastructure, IntelNewsItem, IntelSignal, LLMSettings, MapFilters, NewsCategory, NewsScope, SourceRef, Unit } from './types';
+import { DEFAULT_MAP_CENTER } from './constants';
 import { fetchIntelNews } from './services/llmService';
 import { verifyIntelLocation } from './services/geocodeService';
+import { resolveToCapital } from './services/placeMentions';
+import { canonicalizeUrl } from './services/rssClient';
+import { DEFAULT_HOTSPOT_CELL_SIZE_DEG, deriveHotspotsFromNews, getPrimaryCoordinatesForNews, hotspotIdForCoordinates } from './services/hotspotService';
 import { translateBatchToZh } from './services/translateService';
 import { Loader2, Moon, RefreshCw, Sun, X } from 'lucide-react';
 import { useI18n } from './i18n';
@@ -113,6 +116,38 @@ export default function App() {
   const [themeSource, setThemeSource] = useState<ThemeSource>(initialTheme.source);
   const [isDarkMode, setIsDarkMode] = useState(initialTheme.isDark);
   const [showSettings, setShowSettings] = useState(false);
+
+  const initialScope = useMemo<NewsScope>(() => {
+    try {
+      if (typeof localStorage === 'undefined') return 'global';
+      const raw = localStorage.getItem(INTEL_NEWS_CACHE_KEY);
+      if (!raw) return 'global';
+      const parsed = JSON.parse(raw);
+      const scope = (!Array.isArray(parsed) && parsed && typeof parsed === 'object') ? (parsed as any).scope : null;
+      if (
+        scope === 'global' ||
+        scope === 'americas' ||
+        scope === 'europe' ||
+        scope === 'africa' ||
+        scope === 'middle_east' ||
+        scope === 'asia_pacific'
+      ) {
+        return scope;
+      }
+      return 'global';
+    } catch {
+      return 'global';
+    }
+  }, []);
+
+  const [scope, setScope] = useState<NewsScope>(initialScope);
+  const scopeRef = useRef(scope);
+  useEffect(() => {
+    scopeRef.current = scope;
+  }, [scope]);
+  const [categoryFilter, setCategoryFilter] = useState<NewsCategory | 'all'>('all');
+  const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null);
+
   const [llmSettings, setLlmSettings] = useState<LLMSettings>(DEFAULT_LLM_SETTINGS);
   const llmSettingsRef = useRef<LLMSettings>(llmSettings);
   useEffect(() => {
@@ -219,7 +254,7 @@ export default function App() {
     showBattleResults: true,
   });
 
-  const [units, setUnits] = useState<Unit[]>(() => MOCK_UNITS.map(u => ({ ...u, velocity: undefined })));
+  const [units, setUnits] = useState<Unit[]>([]);
   const unitsRef = useRef<Unit[]>(units);
   useEffect(() => {
     unitsRef.current = units;
@@ -235,16 +270,28 @@ export default function App() {
   const [selectedNewsId, setSelectedNewsId] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapFocus>(null);
   const [latestBatchSize, setLatestBatchSize] = useState(0);
+  const [latestBatchKey, setLatestBatchKey] = useState<string | null>(null);
 
-  const [intelEvents, setIntelEvents] = useState<Event[]>([]);
-  const [intelInfrastructure, setIntelInfrastructure] = useState<Infrastructure[]>([]);
-  const [intelBattleResults, setIntelBattleResults] = useState<BattleResult[]>([]);
   const [intelArrows, setIntelArrows] = useState<Arrow[]>([]);
 
   const refreshSeq = useRef(0);
   const moveSeq = useRef(0);
-  const refreshCountRef = useRef(0);
-  const seenNewsUrlsRef = useRef<Set<string>>(new Set());
+  const refreshCountByScopeRef = useRef<Record<NewsScope, number>>({
+    global: 0,
+    americas: 0,
+    europe: 0,
+    africa: 0,
+    middle_east: 0,
+    asia_pacific: 0,
+  });
+  const seenUrlsByScopeRef = useRef<Record<NewsScope, Set<string>>>({
+    global: new Set(),
+    americas: new Set(),
+    europe: new Set(),
+    africa: new Set(),
+    middle_east: new Set(),
+    asia_pacific: new Set(),
+  });
   const autoRefreshDone = useRef(false);
 
   const [selectedItem, setSelectedItem] = useState<Unit | Event | Infrastructure | BattleResult | null>(null);
@@ -323,7 +370,36 @@ export default function App() {
 
     try {
       const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return;
+      const asScope = (v: any): NewsScope | null => {
+        if (v === 'global' || v === 'americas' || v === 'europe' || v === 'africa' || v === 'middle_east' || v === 'asia_pacific') return v;
+        return null;
+      };
+      const asCategory = (v: any): NewsCategory | undefined => {
+        if (
+          v === 'conflict' ||
+          v === 'politics' ||
+          v === 'economy' ||
+          v === 'disaster' ||
+          v === 'health' ||
+          v === 'tech' ||
+          v === 'science' ||
+          v === 'energy' ||
+          v === 'other'
+        ) return v;
+        return undefined;
+      };
+
+      const cachedScope = (!Array.isArray(parsed) && parsed && typeof parsed === 'object')
+        ? (asScope((parsed as any).scope) || 'global')
+        : 'global';
+
+      const list = Array.isArray(parsed)
+        ? parsed
+        : (!Array.isArray(parsed) && parsed && typeof parsed === 'object' && Array.isArray((parsed as any).news))
+            ? (parsed as any).news
+            : null;
+
+      if (!list) return;
 
       const isValidLonLat = (coords: any): coords is [number, number] => (
         Array.isArray(coords) &&
@@ -339,8 +415,8 @@ export default function App() {
       );
 
       const safe: IntelNewsItem[] = [];
-      for (const it of parsed.slice(0, INTEL_NEWS_CACHE_MAX_ITEMS)) {
-        const url = String(it?.url || '').trim();
+      for (const it of list.slice(0, INTEL_NEWS_CACHE_MAX_ITEMS)) {
+        const url = canonicalizeUrl(String(it?.url || '').trim());
         const title = String(it?.title || '').trim();
         if (!url || !title) continue;
 
@@ -348,7 +424,7 @@ export default function App() {
         const signals: IntelSignal[] = [];
         for (const s of signalsRaw) {
           const loc = s?.location || {};
-          const coords = isValidLonLat(loc?.coordinates) ? (loc.coordinates as [number, number]) : IRAN_COORDINATES;
+          const coords = isValidLonLat(loc?.coordinates) ? (loc.coordinates as [number, number]) : DEFAULT_MAP_CENTER;
           signals.push({
             id: String(s?.id || `sig-cache-${safe.length}-${signals.length}`).trim() || `sig-cache-${safe.length}-${signals.length}`,
             kind: (s?.kind === 'event' || s?.kind === 'movement' || s?.kind === 'infrastructure' || s?.kind === 'battle' || s?.kind === 'unit')
@@ -358,7 +434,7 @@ export default function App() {
             description: String(s?.description || '').trim(),
             severity: (s?.severity === 'low' || s?.severity === 'medium' || s?.severity === 'high') ? s.severity : 'medium',
             location: {
-              name: String(loc?.name || 'Iran').trim() || 'Iran',
+              name: String(loc?.name || '').trim() || 'Unknown',
               country: typeof loc?.country === 'string' ? loc.country.trim() : undefined,
               coordinates: coords,
             },
@@ -369,6 +445,9 @@ export default function App() {
             evidence: String(s?.evidence || '').trim(),
             confidence: clamp01(Number(s?.confidence)),
             verified: typeof s?.verified === 'boolean' ? s.verified : undefined,
+            locationReliability: (s?.locationReliability === 'verified' || s?.locationReliability === 'llm_inferred' || s?.locationReliability === 'capital_fallback')
+              ? s.locationReliability
+              : undefined,
           });
         }
 
@@ -379,11 +458,18 @@ export default function App() {
             title,
             description: String(it?.summary || '').trim(),
             severity: 'low',
-            location: { name: 'Iran', coordinates: IRAN_COORDINATES },
+            location: { name: 'Unknown', coordinates: DEFAULT_MAP_CENTER },
             evidence: '',
             confidence: 0.05,
+            verified: false,
+            locationReliability: 'capital_fallback',
           });
         }
+
+        const mentionsRaw = Array.isArray(it?.mentions) ? it.mentions : [];
+        const mentions = mentionsRaw
+          .map((m: any) => ({ name: String(m?.name || '').trim(), country: typeof m?.country === 'string' ? m.country.trim() : undefined }))
+          .filter((m: any) => m.name);
 
         safe.push({
           id: String(it?.id || '').trim() || `cached-${safe.length}`,
@@ -393,23 +479,25 @@ export default function App() {
           url,
           timestamp: String(it?.timestamp || '').trim(),
           signals,
+          scope: asScope(it?.scope) || cachedScope,
+          category: asCategory(it?.category),
+          isPreview: Boolean(it?.isPreview),
+          mentions: mentions.length > 0 ? mentions : undefined,
         });
       }
 
       if (safe.length === 0) return;
 
+      setScope(cachedScope);
+      scopeRef.current = cachedScope;
       setIntelNews(safe);
       intelNewsRef.current = safe;
       setLatestBatchSize(0);
+      setLatestBatchKey(null);
       for (const item of safe) {
-        const u = String(item?.url || '').trim();
-        if (u) seenNewsUrlsRef.current.add(u);
+        const u = canonicalizeUrl(String(item?.url || '').trim());
+        if (u) seenUrlsByScopeRef.current[cachedScope].add(u);
       }
-
-      const derived = deriveIntelLayersFromNews(safe);
-      setIntelEvents(derived.events);
-      setIntelInfrastructure(derived.infrastructure);
-      setIntelBattleResults(derived.battleResults);
 
       if (localeRef.current === 'zh') {
         const texts: string[] = [];
@@ -484,10 +572,60 @@ export default function App() {
     localStorage.setItem('llmSettings', JSON.stringify(newSettings));
   };
 
-  const allEvents = useMemo(() => [...MOCK_EVENTS, ...intelEvents], [intelEvents]);
-  const allInfrastructure = useMemo(() => [...MOCK_INFRASTRUCTURE, ...intelInfrastructure], [intelInfrastructure]);
-  const allBattleResults = useMemo(() => [...MOCK_BATTLE_RESULTS, ...intelBattleResults], [intelBattleResults]);
-  const allArrows = useMemo(() => [...MOCK_ARROWS, ...intelArrows], [intelArrows]);
+  const newsAfterCategory = useMemo(() => {
+    if (categoryFilter === 'all') return intelNews;
+    return intelNews.filter(n => (n.category || 'other') === categoryFilter);
+  }, [intelNews, categoryFilter]);
+
+  const hotspots = useMemo(() => {
+    return deriveHotspotsFromNews(newsAfterCategory, {
+      cellSizeDeg: DEFAULT_HOTSPOT_CELL_SIZE_DEG,
+      maxHotspots: 12,
+    });
+  }, [newsAfterCategory]);
+
+  useEffect(() => {
+    if (!selectedHotspotId) return;
+    if (hotspots.some(h => h.id === selectedHotspotId)) return;
+    setSelectedHotspotId(null);
+  }, [selectedHotspotId, hotspots]);
+
+  const visibleNews = useMemo(() => {
+    if (!selectedHotspotId) return newsAfterCategory;
+    return newsAfterCategory.filter(item => {
+      const coords = getPrimaryCoordinatesForNews(item);
+      if (!coords) return false;
+      return hotspotIdForCoordinates(coords, DEFAULT_HOTSPOT_CELL_SIZE_DEG) === selectedHotspotId;
+    });
+  }, [newsAfterCategory, selectedHotspotId]);
+
+  const visibleNewsIdSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const n of visibleNews) s.add(n.id);
+    return s;
+  }, [visibleNews]);
+
+  useEffect(() => {
+    if (selectedNewsId && !visibleNewsIdSet.has(selectedNewsId)) {
+      setSelectedNewsId(null);
+      setSelectedItem(null);
+      return;
+    }
+    const itemNewsId = (selectedItem as any)?.newsId;
+    if (typeof itemNewsId === 'string' && itemNewsId && !visibleNewsIdSet.has(itemNewsId)) {
+      setSelectedItem(null);
+    }
+  }, [selectedNewsId, selectedItem, visibleNewsIdSet]);
+
+  const visibleArrows = useMemo(() => {
+    return intelArrows.filter(a => !a.newsId || visibleNewsIdSet.has(a.newsId));
+  }, [intelArrows, visibleNewsIdSet]);
+
+  const derivedLayers = useMemo(() => deriveIntelLayersFromNews(visibleNews), [visibleNews, locale]);
+  const allEvents = derivedLayers.events;
+  const allInfrastructure = derivedLayers.infrastructure;
+  const allBattleResults = derivedLayers.battleResults;
+  const allArrows = visibleArrows;
 
   function buildSourceRef(item: IntelNewsItem): SourceRef {
     return {
@@ -520,6 +658,8 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(signal.confidence),
             verified: signal.verified,
+            locationReliability: signal.locationReliability,
+            mentions: item.mentions,
           });
         } else if (signal.kind === 'infrastructure') {
           const t = signal.infra?.type ? asInfraType(signal.infra.type) : guessInfraType(signal.title);
@@ -536,6 +676,8 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(signal.confidence),
             verified: signal.verified,
+            locationReliability: signal.locationReliability,
+            mentions: item.mentions,
           });
         } else if (signal.kind === 'battle') {
           battleResults.push({
@@ -551,6 +693,8 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(signal.confidence),
             verified: signal.verified,
+            locationReliability: signal.locationReliability,
+            mentions: item.mentions,
           });
         } else if (signal.kind === 'movement') {
           // Always materialize a marker for movement signals so historic news items keep a clickable icon,
@@ -566,6 +710,8 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(signal.confidence),
             verified: signal.verified,
+            locationReliability: signal.locationReliability,
+            mentions: item.mentions,
           });
         } else if (signal.kind === 'unit') {
           // Unit markers can only represent the latest state; add a per-news marker so each item remains clickable.
@@ -580,6 +726,8 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(signal.confidence),
             verified: signal.verified,
+            locationReliability: signal.locationReliability,
+            mentions: item.mentions,
           });
         }
       }
@@ -592,7 +740,7 @@ export default function App() {
     unitId: string,
     from: [number, number],
     to: [number, number],
-    meta: { newsId: string; source: SourceRef; confidence: number; verified?: boolean },
+    meta: { newsId: string; source: SourceRef; confidence: number; verified?: boolean; locationReliability?: Unit['locationReliability'] },
     token: number
   ) {
     const steps = 30;
@@ -612,6 +760,7 @@ export default function App() {
           sources: mergeSources(u.sources, meta.source),
           confidence: clamp01(meta.confidence),
           verified: typeof meta.verified === 'boolean' ? meta.verified : u.verified,
+          locationReliability: meta.locationReliability ?? u.locationReliability,
         };
       }));
       return;
@@ -632,6 +781,7 @@ export default function App() {
           sources: mergeSources(u.sources, meta.source),
           confidence: clamp01(meta.confidence),
           verified: typeof meta.verified === 'boolean' ? meta.verified : u.verified,
+          locationReliability: meta.locationReliability ?? u.locationReliability,
         };
 
         // Add to path history every 2 ticks to keep the trail smooth but bounded.
@@ -665,6 +815,7 @@ export default function App() {
       source: SourceRef;
       confidence: number;
       verified?: boolean;
+      locationReliability?: Unit['locationReliability'];
       label: string;
       affiliation?: Unit['affiliation'];
     };
@@ -725,7 +876,7 @@ export default function App() {
       const src = buildSourceRef(item);
 
       const toLoc = signal.movement?.to || signal.location;
-      const to = toLoc?.coordinates || IRAN_COORDINATES;
+      const to = toLoc?.coordinates || DEFAULT_MAP_CENTER;
       const fromLoc = signal.movement?.from;
 
       // If LLM didn't provide a unit identity, we can still render a sourced movement arrow (if from/to exist),
@@ -744,6 +895,7 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(signal.confidence),
             verified: signal.verified,
+            locationReliability: signal.locationReliability,
           });
         }
         continue;
@@ -761,6 +913,7 @@ export default function App() {
         source: src,
         confidence: clamp01(signal.confidence),
         verified: signal.verified,
+        locationReliability: signal.locationReliability,
         label: signal.title,
         affiliation: unit.affiliation,
       };
@@ -782,6 +935,7 @@ export default function App() {
           newsId: item.id,
           confidence: clamp01(signal.confidence),
           verified: signal.verified,
+          locationReliability: signal.locationReliability,
         });
       }
     }
@@ -806,6 +960,7 @@ export default function App() {
                 source: step.source,
                 confidence: step.confidence,
                 verified: step.verified,
+                locationReliability: step.locationReliability,
               },
               token
             );
@@ -820,15 +975,17 @@ export default function App() {
   async function refreshIntel() {
     const token = ++refreshSeq.current;
     const batchId = `b:${Date.now()}`;
+    const currentScope = scopeRef.current;
     const shouldPreview = intelNewsRef.current.length === 0;
     setLoadingNews(true);
     setNewsError(null);
     try {
       const MAX_NEWS_ITEMS = 100;
-      const mode = refreshCountRef.current === 0 ? 'initial' : 'refresh';
-      const excludeUrls = Array.from(seenNewsUrlsRef.current);
+      const mode = (refreshCountByScopeRef.current[currentScope] || 0) === 0 ? 'initial' : 'refresh';
+      const excludeUrls = Array.from(seenUrlsByScopeRef.current[currentScope] || []);
       const freshAll = await fetchIntelNews(llmSettings, {
         mode,
+        scope: currentScope,
         excludeUrls,
         targetCount: 10,
         onPreview: shouldPreview
@@ -836,7 +993,7 @@ export default function App() {
               if (refreshSeq.current !== token) return;
               const seen = new Set<string>();
               const previewCanonical = (Array.isArray(previewStable) ? previewStable : []).filter(item => {
-                const url = String(item?.url || '').trim();
+                const url = canonicalizeUrl(String(item?.url || '').trim());
                 if (!url) return false;
                 if (seen.has(url)) return false;
                 seen.add(url);
@@ -851,11 +1008,7 @@ export default function App() {
               setIntelNews(preview);
               intelNewsRef.current = preview;
               setLatestBatchSize(0);
-
-              const derived = deriveIntelLayersFromNews(preview);
-              setIntelEvents(derived.events);
-              setIntelInfrastructure(derived.infrastructure);
-              setIntelBattleResults(derived.battleResults);
+              setLatestBatchKey(null);
             }
           : undefined,
       });
@@ -864,7 +1017,7 @@ export default function App() {
       // Dedupe within the freshly fetched batch by URL (keep first occurrence).
       const seenUrls = new Set<string>();
       const freshCanonical = freshAll.filter(item => {
-        const url = String(item?.url || '').trim();
+        const url = canonicalizeUrl(String(item?.url || '').trim());
         if (!url) return false;
         if (seenUrls.has(url)) return false;
         seenUrls.add(url);
@@ -896,26 +1049,21 @@ export default function App() {
       setIntelNews(merged);
       intelNewsRef.current = merged;
       setLatestBatchSize(fresh.length);
+      setLatestBatchKey(batchId);
       for (const item of freshCanonical) {
-        const url = String(item?.url || '').trim();
-        if (url) seenNewsUrlsRef.current.add(url);
+        const url = canonicalizeUrl(String(item?.url || '').trim());
+        if (url) seenUrlsByScopeRef.current[currentScope].add(url);
       }
-      refreshCountRef.current += 1;
+      refreshCountByScopeRef.current[currentScope] = (refreshCountByScopeRef.current[currentScope] || 0) + 1;
 
       try {
         localStorage.setItem(
           INTEL_NEWS_CACHE_KEY,
-          JSON.stringify(merged.slice(0, INTEL_NEWS_CACHE_MAX_ITEMS))
+          JSON.stringify({ scope: currentScope, news: merged.slice(0, INTEL_NEWS_CACHE_MAX_ITEMS) })
         );
       } catch {
         // Ignore quota/serialization errors.
       }
-
-      // Derive clickable layers from signals and kick off sourced unit movement.
-      const derived = deriveIntelLayersFromNews(merged);
-      setIntelEvents(derived.events);
-      setIntelInfrastructure(derived.infrastructure);
-      setIntelBattleResults(derived.battleResults);
 
       // Only animate unit movement based on the current refresh batch (avoid replaying old moves).
       const { arrows: batchArrows } = applyIntelSignalsToUnitsAndArrows(fresh, { animate: true });
@@ -1002,7 +1150,13 @@ export default function App() {
                 country: sig.location.country || vLoc.country,
                 coordinates: vLoc.coordinates,
               };
-              next.verified = vLoc.verified;
+              if (next.locationReliability !== 'capital_fallback') {
+                next.verified = vLoc.verified;
+                if (vLoc.verified) next.locationReliability = 'verified';
+              } else {
+                // Capital fallback stays explicitly untrusted (even if reverse geocode happens to match).
+                next.verified = false;
+              }
             }
 
             if (sig.movement && (vFrom || vTo)) {
@@ -1023,7 +1177,13 @@ export default function App() {
               }
               if (typeof next.verified !== 'boolean') {
                 // If we didn't verify the primary location, fall back to movement verification.
-                next.verified = Boolean(vTo?.verified ?? vFrom?.verified);
+                const verifiedMove = Boolean(vTo?.verified ?? vFrom?.verified);
+                if (next.locationReliability !== 'capital_fallback') {
+                  next.verified = verifiedMove;
+                  if (verifiedMove) next.locationReliability = 'verified';
+                } else {
+                  next.verified = false;
+                }
               }
             }
 
@@ -1032,14 +1192,7 @@ export default function App() {
         }));
 
         const byId = new Map(freshVerified.map(n => [n.id, n] as const));
-        setIntelNews(prev => {
-          const next = prev.map(n => (byId.has(n.id) ? byId.get(n.id)! : n));
-          const nextDerived = deriveIntelLayersFromNews(next);
-          setIntelEvents(nextDerived.events);
-          setIntelInfrastructure(nextDerived.infrastructure);
-          setIntelBattleResults(nextDerived.battleResults);
-          return next;
-        });
+        setIntelNews(prev => prev.map(n => (byId.has(n.id) ? byId.get(n.id)! : n)));
 
         // Patch arrow endpoints (keep original starts so the direction stays meaningful).
         const nextEnds = new Map<string, [number, number]>();
@@ -1066,9 +1219,52 @@ export default function App() {
     }
   }
 
+  function withMentions<T extends Unit | Event | Infrastructure | BattleResult>(item: T | null): T | null {
+    if (!item) return null;
+    const mentions = Array.isArray((item as any).mentions) ? (item as any).mentions : undefined;
+    return {
+      ...(item as any),
+      mentions,
+      onSelectMention: (m: { name: string; country?: string }) => {
+        const cap = resolveToCapital(m?.name);
+        if (!cap) return;
+        setFocus({ coordinates: cap.coordinates, zoom: 4, key: `mention:${cap.name}:${Date.now()}` });
+      },
+    } as T;
+  }
+
+  function handleSelectHotspot(hs: Hotspot | null) {
+    const nextId = hs?.id || null;
+    setSelectedHotspotId(nextId);
+    if (hs) {
+      setFocus({ coordinates: hs.center, zoom: 2.6, key: `hotspot:${hs.id}:${Date.now()}` });
+    }
+  }
+
+  function handleChangeScope(next: NewsScope) {
+    if (next === scopeRef.current) return;
+    scopeRef.current = next;
+    setScope(next);
+    setCategoryFilter('all');
+    setSelectedHotspotId(null);
+    setSelectedNewsId(null);
+    setSelectedItem(null);
+    setLatestBatchSize(0);
+    setLatestBatchKey(null);
+    setNewsError(null);
+    setIntelNews([]);
+    intelNewsRef.current = [];
+    setIntelArrows([]);
+    setUnits([]);
+    unitsRef.current = [];
+    if (llmSettingsRef.current.endpoint && llmSettingsRef.current.apiKey) {
+      void refreshIntel();
+    }
+  }
+
   function handleSelectNews(id: string) {
     setSelectedNewsId(id);
-    const item = intelNews.find(n => n.id === id);
+    const item = intelNewsRef.current.find(n => n.id === id);
     const best = item ? pickBestSignal(item.signals || []) : null;
     const coords = best?.movement?.to?.coordinates || best?.location?.coordinates;
     if (coords) {
@@ -1077,7 +1273,7 @@ export default function App() {
 
     let primary: Unit | Event | Infrastructure | BattleResult | null = null;
     if (item && best) {
-      const resolvedCoords = (best.movement?.to?.coordinates || best.location.coordinates || coords || IRAN_COORDINATES) as [number, number];
+      const resolvedCoords = (best.movement?.to?.coordinates || best.location.coordinates || coords || DEFAULT_MAP_CENTER) as [number, number];
 
       if (best.kind === 'infrastructure') {
         const targetId = `intel-infra:${item.id}:${best.id}`;
@@ -1097,6 +1293,8 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(best.confidence),
             verified: best.verified,
+            locationReliability: best.locationReliability,
+            mentions: item.mentions,
           };
         }
       } else if (best.kind === 'battle') {
@@ -1116,6 +1314,8 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(best.confidence),
             verified: best.verified,
+            locationReliability: best.locationReliability,
+            mentions: item.mentions,
           };
         }
       } else {
@@ -1133,24 +1333,28 @@ export default function App() {
             newsId: item.id,
             confidence: clamp01(best.confidence),
             verified: best.verified,
+            locationReliability: best.locationReliability,
+            mentions: item.mentions,
           };
         }
       }
     }
 
-    setSelectedItem(primary);
-    if (isMobile) setMobileSheet(primary ? 'details' : 'none');
+    const next = withMentions(primary);
+    setSelectedItem(next);
+    if (isMobile) setMobileSheet(next ? 'details' : 'none');
   }
 
   function handleSelectItem(item: Unit | Event | Infrastructure | BattleResult | null) {
-    setSelectedItem(item);
-    const newsId = (item as any)?.newsId;
+    const next = withMentions(item);
+    setSelectedItem(next);
+    const newsId = (next as any)?.newsId;
     if (typeof newsId === 'string' && newsId) setSelectedNewsId(newsId);
-    const coords = (item as any)?.coordinates;
+    const coords = (next as any)?.coordinates;
     if (Array.isArray(coords) && coords.length === 2) {
-      setFocus({ coordinates: coords as [number, number], zoom: 5, key: `item:${(item as any)?.id || 'x'}:${Date.now()}` });
+      setFocus({ coordinates: coords as [number, number], zoom: 5, key: `item:${(next as any)?.id || 'x'}:${Date.now()}` });
     }
-    if (isMobile && item) setMobileSheet('details');
+    if (isMobile && next) setMobileSheet('details');
   }
 
   const mobileSheetTitle =
@@ -1232,8 +1436,12 @@ export default function App() {
           arrows={allArrows}
           infrastructure={allInfrastructure}
           battleResults={allBattleResults}
+          hotspots={hotspots}
+          selectedHotspotId={selectedHotspotId}
           focus={focus}
           selectedNewsId={selectedNewsId}
+          isMobile={isMobile}
+          onSelectHotspot={handleSelectHotspot}
           onSelectEvent={handleSelectItem}
           onSelectUnit={handleSelectItem}
           onSelectInfrastructure={handleSelectItem}
@@ -1251,8 +1459,16 @@ export default function App() {
       <div className="hidden lg:block w-80 h-full py-4 pr-4 pl-2">
         <NewsPanel 
           settings={llmSettings} 
-          news={intelNews}
+          scope={scope}
+          category={categoryFilter}
+          hotspots={hotspots}
+          selectedHotspotId={selectedHotspotId}
+          onChangeScope={handleChangeScope}
+          onChangeCategory={setCategoryFilter}
+          onSelectHotspot={handleSelectHotspot}
+          news={visibleNews}
           latestBatchSize={latestBatchSize}
+          latestBatchKey={latestBatchKey}
           loading={loadingNews}
           error={newsError}
           selectedNewsId={selectedNewsId}
@@ -1332,8 +1548,16 @@ export default function App() {
                   {mobileSheet === 'news' && (
                     <NewsPanel
                       settings={llmSettings}
-                      news={intelNews}
+                      scope={scope}
+                      category={categoryFilter}
+                      hotspots={hotspots}
+                      selectedHotspotId={selectedHotspotId}
+                      onChangeScope={handleChangeScope}
+                      onChangeCategory={setCategoryFilter}
+                      onSelectHotspot={handleSelectHotspot}
+                      news={visibleNews}
                       latestBatchSize={latestBatchSize}
+                      latestBatchKey={latestBatchKey}
                       loading={loadingNews}
                       error={newsError}
                       selectedNewsId={selectedNewsId}

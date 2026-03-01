@@ -1,5 +1,5 @@
 import React from 'react';
-import { IntelNewsItem, LLMSettings } from '../types';
+import { Hotspot, IntelNewsItem, LLMSettings, NewsCategory, NewsScope } from '../types';
 import { Activity, ExternalLink, Github, MapPin, RefreshCw, Settings } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useI18n } from '../i18n';
@@ -7,8 +7,16 @@ import clsx from 'clsx';
 
 interface NewsPanelProps {
   settings: LLMSettings;
+  scope: NewsScope;
+  category: NewsCategory | 'all';
+  hotspots: Hotspot[];
+  selectedHotspotId: string | null;
+  onChangeScope: (scope: NewsScope) => void;
+  onChangeCategory: (category: NewsCategory | 'all') => void;
+  onSelectHotspot: (hotspot: Hotspot | null) => void;
   news: IntelNewsItem[];
   latestBatchSize: number;
+  latestBatchKey?: string | null;
   loading: boolean;
   error: string | null;
   selectedNewsId: string | null;
@@ -21,8 +29,16 @@ interface NewsPanelProps {
 
 export default function NewsPanel({
   settings,
+  scope,
+  category,
+  hotspots,
+  selectedHotspotId,
+  onChangeScope,
+  onChangeCategory,
+  onSelectHotspot,
   news,
   latestBatchSize,
+  latestBatchKey,
   loading,
   error,
   selectedNewsId,
@@ -35,6 +51,31 @@ export default function NewsPanel({
   const { t } = useI18n();
   const missingSettings = !settings.endpoint || !settings.apiKey;
   const showSkeleton = loading && news.length === 0;
+
+  let dividerAfterIndex = -1;
+  if (latestBatchKey) {
+    const needle = `:${latestBatchKey}:`;
+    for (let i = 0; i < news.length; i++) {
+      if (String(news[i]?.id || '').includes(needle)) dividerAfterIndex = i;
+    }
+    if (dividerAfterIndex >= news.length - 1) dividerAfterIndex = -1;
+  } else if (latestBatchSize > 0 && news.length > latestBatchSize) {
+    dividerAfterIndex = latestBatchSize - 1;
+  }
+
+  const categories: Array<NewsCategory | 'all'> = [
+    'all',
+    'conflict',
+    'politics',
+    'economy',
+    'disaster',
+    'health',
+    'tech',
+    'science',
+    'energy',
+    'other',
+  ];
+
   return (
     <div
       className={clsx(
@@ -76,6 +117,97 @@ export default function NewsPanel({
         </div>
       </div>
 
+      <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            {t('news.scope')}
+          </div>
+          <select
+            value={scope}
+            onChange={(e) => onChangeScope(e.target.value as NewsScope)}
+            className="text-xs rounded-md border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 px-2 py-1 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+          >
+            <option value="global">{t('scope.global')}</option>
+            <option value="americas">{t('scope.americas')}</option>
+            <option value="europe">{t('scope.europe')}</option>
+            <option value="africa">{t('scope.africa')}</option>
+            <option value="middle_east">{t('scope.middle_east')}</option>
+            <option value="asia_pacific">{t('scope.asia_pacific')}</option>
+          </select>
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            {t('news.category')}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {categories.map((c) => {
+              const active = c === category;
+              const label = c === 'all' ? t('category.all') : t((`category.${c}`) as any);
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => onChangeCategory(c)}
+                  className={clsx(
+                    "px-2 py-1 rounded-full border text-[11px] font-mono transition-colors",
+                    active
+                      ? "bg-cyan-600 text-white border-cyan-600"
+                      : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  )}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              {t('news.hotspots')}
+            </div>
+            {selectedHotspotId && (
+              <button
+                type="button"
+                onClick={() => onSelectHotspot(null)}
+                className="text-[10px] font-mono uppercase tracking-wider text-cyan-700 dark:text-cyan-300 underline decoration-cyan-500/40 hover:decoration-cyan-500"
+              >
+                {t('news.clearHotspot')}
+              </button>
+            )}
+          </div>
+          {Array.isArray(hotspots) && hotspots.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {hotspots.map((hs) => {
+                const active = selectedHotspotId === hs.id;
+                return (
+                  <button
+                    key={hs.id}
+                    type="button"
+                    onClick={() => onSelectHotspot(active ? null : hs)}
+                    className={clsx(
+                      "px-2 py-1 rounded-full border text-[11px] font-mono transition-colors",
+                      active
+                        ? "bg-cyan-600 text-white border-cyan-600"
+                        : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    )}
+                    title={hs.label}
+                  >
+                    {hs.label} <span className="opacity-70">({hs.count})</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              {t('news.noHotspots')}
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
         {missingSettings ? (
           <div className="text-slate-500 text-sm p-4 bg-slate-50 dark:bg-slate-800/30 rounded-lg border border-slate-200 dark:border-slate-700/50 flex flex-col gap-2">
@@ -113,10 +245,7 @@ export default function NewsPanel({
           </div>
         ) : (
           news.map((item, index) => {
-            const showDivider =
-              latestBatchSize > 0 &&
-              news.length > latestBatchSize &&
-              index === latestBatchSize - 1;
+            const showDivider = dividerAfterIndex >= 0 && index === dividerAfterIndex;
 
             return (
               <React.Fragment key={item.id}>
@@ -154,9 +283,21 @@ export default function NewsPanel({
                     {translate ? translate(item.summary) : item.summary}
                   </p>
                   <div className="flex justify-between items-center mt-1">
-                    <span className="text-[10px] font-mono text-cyan-600 dark:text-cyan-500/70 uppercase tracking-wider">
-                      {item.source}
-                    </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[10px] font-mono text-cyan-600 dark:text-cyan-500/70 uppercase tracking-wider truncate">
+                        {item.source}
+                      </span>
+                      {item.category ? (
+                        <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400">
+                          {t((`category.${item.category}`) as any)}
+                        </span>
+                      ) : null}
+                      {item.isPreview ? (
+                        <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-500/30 text-amber-700 dark:text-amber-300">
+                          PREVIEW
+                        </span>
+                      ) : null}
+                    </div>
                     <span className="text-[10px] font-mono text-slate-500">
                       {item.timestamp}
                     </span>

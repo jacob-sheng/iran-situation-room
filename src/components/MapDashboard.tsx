@@ -5,11 +5,10 @@ import {
   Geography,
   Marker,
   Line,
-  Annotation as MapAnnotation,
   ZoomableGroup
 } from 'react-simple-maps';
-import { Unit, Event, Arrow, Annotation, MapFilters, Infrastructure, BattleResult } from '../types';
-import { MOCK_ANNOTATIONS, IRAN_COORDINATES } from '../constants';
+import { Hotspot, Unit, Event, Arrow, MapFilters, Infrastructure, BattleResult } from '../types';
+import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM_DESKTOP, DEFAULT_MAP_ZOOM_MOBILE } from '../constants';
 import { MapPin, Shield, Plane, Anchor, AlertTriangle, Factory, Zap, Building, Crosshair, Skull, Flame } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -22,8 +21,12 @@ interface MapDashboardProps {
   arrows: Arrow[];
   infrastructure: Infrastructure[];
   battleResults: BattleResult[];
+  hotspots?: Hotspot[];
+  selectedHotspotId?: string | null;
   focus?: { coordinates: [number, number]; zoom?: number; key: string } | null;
   selectedNewsId?: string | null;
+  isMobile?: boolean;
+  onSelectHotspot?: (hotspot: Hotspot | null) => void;
   onSelectEvent: (event: Event | null) => void;
   onSelectUnit: (unit: Unit | null) => void;
   onSelectInfrastructure: (infra: Infrastructure | null) => void;
@@ -37,14 +40,21 @@ export default function MapDashboard({
   arrows,
   infrastructure, 
   battleResults, 
+  hotspots,
+  selectedHotspotId,
   focus,
   selectedNewsId,
+  isMobile,
+  onSelectHotspot,
   onSelectEvent, 
   onSelectUnit,
   onSelectInfrastructure,
   onSelectBattleResult
 }: MapDashboardProps) {
-  const [position, setPosition] = useState({ coordinates: IRAN_COORDINATES, zoom: 4 });
+  const [position, setPosition] = useState(() => ({
+    coordinates: DEFAULT_MAP_CENTER,
+    zoom: isMobile ? DEFAULT_MAP_ZOOM_MOBILE : DEFAULT_MAP_ZOOM_DESKTOP,
+  }));
   const [hoveredCountryGroup, setHoveredCountryGroup] = useState<'china-taiwan' | null>(null);
   const clearHoverTimerRef = useRef<number | null>(null);
 
@@ -115,8 +125,8 @@ export default function MapDashboard({
       <ComposableMap
         projection="geoMercator"
         projectionConfig={{
-          scale: 800,
-          center: IRAN_COORDINATES
+          scale: 180,
+          center: DEFAULT_MAP_CENTER
         }}
         className="w-full h-full"
       >
@@ -130,21 +140,20 @@ export default function MapDashboard({
             {({ geographies }) =>
               geographies.map((geo) => {
                 const geoId = String((geo as any).id ?? '');
-                const isIran = geo.properties.name === 'Iran';
                 const isChina = geoId === '156' || geo.properties.name === 'China';
                 const isTaiwan = geoId === '158' || geo.properties.name === 'Taiwan';
                 const isChinaTaiwan = isChina || isTaiwan;
                 const isChinaTaiwanHovered = hoveredCountryGroup === 'china-taiwan';
 
-                const baseFill = isIran ? 'rgba(6, 182, 212, 0.15)' : 'var(--color-slate-200, #e2e8f0)';
-                const hoverFill = isIran ? 'rgba(6, 182, 212, 0.25)' : 'var(--color-slate-300, #cbd5e1)';
+                const baseFill = 'var(--color-slate-200, #e2e8f0)';
+                const hoverFill = 'var(--color-slate-300, #cbd5e1)';
                 const effectiveFill = isChinaTaiwan && isChinaTaiwanHovered ? hoverFill : baseFill;
 
                 const defaultStroke =
                   isTaiwan
                     ? 'transparent'
-                    : (isIran ? '#06b6d4' : (isChinaTaiwan && isChinaTaiwanHovered ? 'var(--color-slate-400, #94a3b8)' : 'var(--color-slate-300, #cbd5e1)'));
-                const hoverStroke = isTaiwan ? 'transparent' : (isIran ? '#06b6d4' : 'var(--color-slate-400, #94a3b8)');
+                    : (isChinaTaiwan && isChinaTaiwanHovered ? 'var(--color-slate-400, #94a3b8)' : 'var(--color-slate-300, #cbd5e1)');
+                const hoverStroke = isTaiwan ? 'transparent' : 'var(--color-slate-400, #94a3b8)';
 
                 const handleEnter = () => {
                   if (!isChinaTaiwan) return;
@@ -178,7 +187,7 @@ export default function MapDashboard({
                         fill: effectiveFill,
                         // Merge Taiwan visually into China: drop Taiwan stroke but keep hover in sync.
                         stroke: defaultStroke,
-                        strokeWidth: isTaiwan ? 0 : (isIran ? 1 : 0.5),
+                        strokeWidth: isTaiwan ? 0 : 0.5,
                         pointerEvents: 'auto',
                         outline: 'none'
                       },
@@ -223,23 +232,36 @@ export default function MapDashboard({
           })}
 
           {/* Annotations */}
-          {filters.showAnnotations && MOCK_ANNOTATIONS.map((ann) => (
-            <MapAnnotation
-              key={ann.id}
-              subject={ann.coordinates}
-              dx={-30 * markerScale}
-              dy={-30 * markerScale}
-              connectorProps={{
-                stroke: "#94a3b8",
-                strokeWidth: 1 * markerScale,
-                strokeLinecap: "round"
-              }}
-            >
-              <text x="-8" textAnchor="end" alignmentBaseline="middle" fill="#94a3b8" fontSize={10 * markerScale} className="font-mono uppercase tracking-wider">
-                {ann.text}
-              </text>
-            </MapAnnotation>
-          ))}
+          {/* Intentionally left empty in global mode (no baked-in mock labels). */}
+
+          {/* Hotspots */}
+          {Array.isArray(hotspots) && hotspots.map((hs) => {
+            const isSelected = Boolean(selectedHotspotId && hs.id === selectedHotspotId);
+            const r = 10 + Math.min(10, hs.count);
+            const fill = isSelected ? 'rgba(6, 182, 212, 0.30)' : 'rgba(6, 182, 212, 0.20)';
+            const stroke = isSelected ? '#06b6d4' : 'rgba(6, 182, 212, 0.55)';
+            return (
+              <Marker
+                key={hs.id}
+                coordinates={hs.center}
+                onClick={() => onSelectHotspot?.(isSelected ? null : hs)}
+              >
+                <g transform={`scale(${markerScale})`} className="cursor-pointer">
+                  <circle cx="0" cy="0" r={r} fill={fill} stroke={stroke} strokeWidth={2} />
+                  <circle cx="0" cy="0" r={r + 6} fill="none" stroke={stroke} strokeOpacity={0.35} strokeWidth={2} />
+                  <text
+                    x="0"
+                    y="4"
+                    textAnchor="middle"
+                    className="fill-slate-900 dark:fill-white"
+                    style={{ fontSize: 14, fontWeight: 700 }}
+                  >
+                    {hs.count}
+                  </text>
+                </g>
+              </Marker>
+            );
+          })}
 
           {/* Infrastructure */}
           {filters.showInfrastructure && infrastructure.map((infra) => (

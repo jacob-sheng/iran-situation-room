@@ -2,15 +2,15 @@
 apiVersion: zeabur.com/v1
 kind: Template
 metadata:
-  name: Iran Situation Room
+  name: Global Situation Room
 spec:
-  description: A modern, tech-themed dashboard visualizing the current situation in Iran with real-time news updates.
+  description: A modern, tech-themed dashboard visualizing global breaking news and hotspots with real-time intel updates.
   tags:
     - Vite
     - React
     - Dashboard
   readme: |-
-    # Iran Situation Room (Zeabur)
+    # Global Situation Room (Zeabur)
 
     ## After deployment
     1. Open the service URL
